@@ -22,6 +22,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+from urllib.parse import quote
 from datetime import date, datetime, timedelta
 from http.cookiejar import CookieJar, Cookie
 from pathlib import Path
@@ -33,6 +34,8 @@ from cryptography.fernet import Fernet
 import keyring
 
 import httpx
+from dotenv import load_dotenv
+from lxml import html as lxml_html
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 
@@ -56,6 +59,18 @@ COOKIES_FILE = CONFIG_DIR / "cookies.json"
 MFP_API_BASE = "https://api.myfitnesspal.com"
 MFP_CLIENT_ID = "mfp-main-js"
 VALID_MEALS = ("Breakfast", "Lunch", "Dinner", "Snacks")
+
+
+def load_environment() -> None:
+    """Load local credentials without overriding explicitly supplied values."""
+    project_env = Path(__file__).resolve().parents[2] / ".env"
+    cwd_env = Path.cwd() / ".env"
+
+    # Support launches from both the repository and another working directory.
+    # Existing shell/MCP-client variables always take precedence.
+    load_dotenv(project_env, override=False)
+    if cwd_env != project_env:
+        load_dotenv(cwd_env, override=False)
 
 
 # ============================================================================
@@ -1166,7 +1181,10 @@ class CreateCustomFoodInput(BaseModel):
     public: bool = Field(
         default=False, description="Share publicly. Keep False for personal entries."
     )
-    response_format: str = Field(default="markdown", description="'markdown' or 'json'")
+    response_format: ResponseFormat = Field(
+        default=ResponseFormat.MARKDOWN,
+        description="Output format: 'markdown' for human-readable or 'json' for structured data",
+    )
 
 
 class DeleteCustomFoodInput(BaseModel):
@@ -1175,7 +1193,10 @@ class DeleteCustomFoodInput(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     food_id: str = Field(..., description="Food id (from mfp_create_custom_food or mfp_list_own_foods)", min_length=1)
-    response_format: str = Field(default="markdown", description="'markdown' or 'json'")
+    response_format: ResponseFormat = Field(
+        default=ResponseFormat.MARKDOWN,
+        description="Output format: 'markdown' for human-readable or 'json' for structured data",
+    )
 
 
 class ListOwnFoodsInput(BaseModel):
@@ -1185,7 +1206,10 @@ class ListOwnFoodsInput(BaseModel):
 
     search: str = Field(default="", description="Optional substring filter on the food name")
     limit: int = Field(default=25, description="Max foods to return", gt=0, le=200)
-    response_format: str = Field(default="markdown", description="'markdown' or 'json'")
+    response_format: ResponseFormat = Field(
+        default=ResponseFormat.MARKDOWN,
+        description="Output format: 'markdown' for human-readable or 'json' for structured data",
+    )
 
 
 class RemoveFoodFromDiaryInput(BaseModel):
@@ -1351,7 +1375,7 @@ def select_serving_size(food: Dict[str, Any], unit: Optional[str] = None) -> Dic
 #
 # MFP exposes no custom-food create on the v2 OAuth API, but its own web client
 # does it with three plain HTTP calls, all cookie-authenticated. Since this
-# server already holds a logged-in cookie jar, it can call them directly , no
+# server already holds a logged-in cookie jar, it can call them directly — no
 # browser automation, no Chrome running.
 #
 #   GET  /api/auth/csrf                  -> { csrfToken }
@@ -1371,6 +1395,11 @@ def select_serving_size(food: Dict[str, Any], unit: Optional[str] = None) -> Dic
 # ============================================================================
 
 MFP_WEB_BASE = "https://www.myfitnesspal.com"
+MFP_FOOD_SEARCH_PAGE = f"{MFP_WEB_BASE}/food/calorie-chart-nutrition-facts"
+MFP_BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
+)
 
 # canonical arg -> MFP nutritional_contents key
 _NUTRIENT_KEYS = {
@@ -1423,6 +1452,98 @@ def _api_error_detail(response) -> str:
     )
 
 
+def _extract_food_search_items(content: bytes, query: str) -> List[Dict[str, Any]]:
+    """Extract food results from the search page's server-rendered state."""
+    document = lxml_html.fromstring(content)
+    scripts = document.xpath("//script[@id='__NEXT_DATA__']/text()")
+    if not scripts:
+        raise RuntimeError("MyFitnessPal search page contained no Next.js state")
+
+    try:
+        page_data = json.loads(scripts[0])
+        queries = page_data["props"]["pageProps"]["dehydratedState"]["queries"]
+    except (KeyError, TypeError, json.JSONDecodeError) as e:
+        raise RuntimeError("MyFitnessPal search page state had an unexpected format") from e
+
+    wanted = query.casefold()
+    for cached_query in queries:
+        query_key = cached_query.get("queryKey") or []
+        if (
+            len(query_key) >= 2
+            and query_key[0] == "food"
+            and str(query_key[1]).casefold() == wanted
+        ):
+            data = cached_query.get("state", {}).get("data", {})
+            items = data.get("items") if isinstance(data, dict) else None
+            return items if isinstance(items, list) else []
+
+    raise RuntimeError(f"MyFitnessPal search page contained no results state for {query!r}")
+
+
+def _format_serving_size(serving: Dict[str, Any]) -> str:
+    """Format the primary serving the same way the website displays it."""
+    value = serving.get("value")
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    return " ".join(str(part) for part in (value, serving.get("unit")) if part is not None)
+
+
+def search_foods_web(client, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+    """Search foods through the cookie-authenticated MyFitnessPal webpage."""
+    url = f"{MFP_FOOD_SEARCH_PAGE}/{quote(query, safe='')}"
+
+    def load_page():
+        return client.session.get(
+            url,
+            headers={
+                "Accept": "text/html,application/xhtml+xml",
+                "User-Agent": MFP_BROWSER_USER_AGENT,
+            },
+            timeout=30,
+        )
+
+    response = load_page()
+
+    # A cookie set can still satisfy the legacy diary endpoint while NextAuth
+    # considers it incomplete and redirects modern web pages to /account/logout.
+    # Refresh from the browser in that case, then persist only after the search
+    # page itself proves the replacement session works.
+    if "/account/logout" in str(getattr(response, "url", "")):
+        browser_session = try_chromium_browsers_for_session_cookies()
+        if browser_session:
+            _, browser_cookies = browser_session
+            client.session.cookies.clear()
+            client.session.cookies.update(dict_to_cookiejar(browser_cookies))
+            response = load_page()
+            if response.status_code == 200 and "/account/logout" not in str(response.url):
+                save_cookies(browser_cookies)
+
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"Could not load MyFitnessPal food search: HTTP {response.status_code}. "
+            "The stored browser session may have expired."
+        )
+
+    raw_items = _extract_food_search_items(response.content, query)
+    results = []
+    for wrapped_item in raw_items[:limit]:
+        item = wrapped_item.get("item", {}) if isinstance(wrapped_item, dict) else {}
+        if not item.get("id"):
+            continue
+        serving_sizes = item.get("serving_sizes") or []
+        energy = (item.get("nutritional_contents") or {}).get("energy") or {}
+        results.append(
+            {
+                "name": item.get("description"),
+                "brand": item.get("brand_name"),
+                "serving": _format_serving_size(serving_sizes[0]) if serving_sizes else None,
+                "calories": energy.get("value"),
+                "mfp_id": str(item["id"]),
+            }
+        )
+    return results
+
+
 def _get_csrf_token(client) -> Optional[str]:
     """Fetch a CSRF token. Returns None if unavailable; POST will then 403."""
     try:
@@ -1447,7 +1568,7 @@ def list_own_foods(client, search: str = "") -> List[Dict[str, Any]]:
     if r.status_code != 200:
         raise RuntimeError(
             f"Could not list own foods: HTTP {r.status_code}. "
-            "The stored session may have expired , run refresh_browser_cookies."
+            "The stored session may have expired — run refresh_browser_cookies."
         )
     return r.json() or []
 
@@ -1521,9 +1642,10 @@ def create_custom_food(client, spec: Dict[str, Any]) -> Dict[str, Any]:
 
     if r.status_code not in (200, 201):
         hint = "" if csrf else " (no CSRF token acquired)"
+        detail = _api_error_detail(r)
         raise RuntimeError(
             f"Failed to create custom food: HTTP {r.status_code}{hint}"
-            + (f" - {_api_error_detail(r)}" if _api_error_detail(r) else "")
+            + (f" - {detail}" if detail else "")
         )
 
     # MFP returns a bare list of the created food object(s); older docs/clients
@@ -1545,7 +1667,7 @@ def create_custom_food(client, spec: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def delete_custom_food(client, food_id: str) -> int:
-    """Delete a custom food by id. MFP has no update endpoint , recreate + delete."""
+    """Delete a custom food by id. MFP has no update endpoint — recreate + delete."""
     csrf = _get_csrf_token(client)
     r = client.session.delete(
         f"{MFP_WEB_BASE}/api/services/foods/{food_id}",
@@ -1553,9 +1675,10 @@ def delete_custom_food(client, food_id: str) -> int:
         timeout=30,
     )
     if r.status_code not in (200, 204):
+        detail = _api_error_detail(r)
         raise RuntimeError(
             f"Failed to delete custom food {food_id}: HTTP {r.status_code}"
-            + (f" - {_api_error_detail(r)}" if _api_error_detail(r) else "")
+            + (f" - {detail}" if detail else "")
         )
     logger.info(f"Deleted custom food {food_id}")
     return r.status_code
@@ -1883,23 +2006,8 @@ async def mfp_search_food(params: SearchFoodInput) -> str:
     """
     try:
         client = get_mfp_client()
-        results = client.get_food_search_results(params.query)
-
-        # Limit results
-        results = results[: params.limit]
-
-        data = {"query": params.query, "count": len(results), "results": []}
-
-        for item in results:
-            data["results"].append(
-                {
-                    "name": item.name,
-                    "brand": item.brand,
-                    "serving": item.serving,
-                    "calories": item.calories,
-                    "mfp_id": item.mfp_id,
-                }
-            )
+        results = search_foods_web(client, params.query, params.limit)
+        data = {"query": params.query, "count": len(results), "results": results}
 
         return format_response(
             data, params.response_format, f"Food Search Results for '{params.query}'"
@@ -2821,6 +2929,7 @@ async def mfp_delete_custom_food(params: DeleteCustomFoodInput) -> str:
 
 def main():
     """Run the MCP server."""
+    load_environment()
     mcp.run()
 
 
