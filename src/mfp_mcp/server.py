@@ -1748,8 +1748,8 @@ def add_food_to_diary(
         f"x{quantity}) to {meal_name} for {target_date}"
     )
 
-    # MFP returns the new entry's id here and nowhere else - the diary page
-    # exposes only legacy numeric ids, which the v2 API does not accept.
+    # Keep the returned UUID so callers can verify or remove this exact entry
+    # through the modern webpage diary service.
     try:
         return response.json()["items"][0]["id"]
     except (ValueError, KeyError, IndexError):
@@ -1759,38 +1759,37 @@ def add_food_to_diary(
 
 def list_diary_entries(client, target_date: date) -> List[Dict[str, str]]:
     """
-    Scrape the diary page for the given date and return a list of entries
-    with their internal food_entry_id (needed for deletion), name, and meal.
+    Read the webpage diary service and return food entries for a date.
 
     Returns:
         List of {"entry_id", "name", "meal"} dicts in display order.
     """
-    import re
-
     date_str = target_date.strftime("%Y-%m-%d")
-    diary_url = f"{client.BASE_URL_SECURE}food/diary?date={date_str}"
-    # Use the library's session to ensure cookies/CSRF/etc. are aligned
-    response = client.session.get(diary_url)
-    src = response.text
+    csrf = _get_csrf_token(client)
+    response = client.session.get(
+        f"{MFP_WEB_BASE}/api/services/diary/read_diary",
+        params={"entry_date": date_str, "types": "food_entry"},
+        headers=_web_headers(csrf),
+        timeout=30,
+    )
+    if response.status_code != 200:
+        raise RuntimeError(f"Could not read diary entries: HTTP {response.status_code}")
 
     entries: List[Dict[str, str]] = []
-    # Walk through the HTML linearly. Track the most recent meal header.
-    current_meal = None
-    pattern = re.compile(
-        r'(class="meal_header"[^>]*>\s*<[^>]+>([^<]+)</[^>]+>)|'
-        r'(<a[^>]+data-food-entry-id="(\d+)"[^>]+class="js-show-edit-food"[^>]*>'
-        r'([^<]+)</a>)',
-        re.DOTALL,
-    )
-    for m in pattern.finditer(src):
-        if m.group(2):
-            current_meal = m.group(2).strip()
-        elif m.group(4):
-            entries.append({
-                "entry_id": m.group(4),
-                "name": m.group(5).strip(),
-                "meal": current_meal or "",
-            })
+    for raw_entry in response.json() or []:
+        if raw_entry.get("type") != "food_entry" or not raw_entry.get("id"):
+            continue
+        food = raw_entry.get("food") or {}
+        if isinstance(food, dict) and isinstance(food.get("item"), dict):
+            food = food["item"]
+        name = food.get("description", "") if isinstance(food, dict) else ""
+        entries.append(
+            {
+                "entry_id": str(raw_entry["id"]),
+                "name": str(name),
+                "meal": str(raw_entry.get("meal_name") or ""),
+            }
+        )
     return entries
 
 
@@ -1798,36 +1797,16 @@ def remove_food_entry(client, entry_id: str) -> None:
     """
     Delete a food diary entry by its food_entry_id.
 
-    Uses the legacy /food/remove/{id} endpoint with X-CSRF-Token from
-    the diary page meta tag.
+    Uses the same cookie-authenticated webpage service that creates and reads
+    modern UUID-based entries.
     """
-    import re
-
-    # Need a fresh CSRF token from the diary page
-    diary_resp = client.session.get(
-        f"{client.BASE_URL_SECURE}food/diary"
+    csrf = _get_csrf_token(client)
+    response = client.session.delete(
+        f"{MFP_WEB_BASE}/api/services/diary/{entry_id}",
+        headers=_web_headers(csrf),
+        timeout=30,
     )
-    csrf_match = re.search(
-        r'<meta[^>]+name=["\']csrf-token["\'][^>]+content=["\']([^"\']+)["\']',
-        diary_resp.text,
-    )
-    if not csrf_match:
-        raise RuntimeError("Could not extract csrf-token from diary page")
-    csrf = csrf_match.group(1)
-
-    response = client.session.request(
-        "DELETE",
-        f"{client.BASE_URL_SECURE}food/remove/{entry_id}",
-        headers={
-            "Referer": f"{client.BASE_URL_SECURE}food/diary",
-            "X-CSRF-Token": csrf,
-            "X-Requested-With": "XMLHttpRequest",
-            "Accept": "application/json, text/javascript, */*; q=0.01",
-        },
-        allow_redirects=False,
-    )
-    # Success = 302 redirect to diary, or 200 with empty body
-    if response.status_code in (200, 204, 302, 303):
+    if response.status_code in (200, 204):
         logger.info(f"Removed diary entry {entry_id}")
         return
     raise RuntimeError(
