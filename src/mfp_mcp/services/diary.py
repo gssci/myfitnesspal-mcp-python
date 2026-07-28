@@ -1,0 +1,212 @@
+"""Food diary and water mutation services."""
+
+import json
+import logging
+from datetime import date
+
+from ..config import MFP_API_BASE, MFP_WEB_BASE, VALID_MEALS
+from .food import get_food_v2, select_serving_size
+from .http import _get_csrf_token, _mfp_api_headers, _web_headers
+
+logger = logging.getLogger("mfp_mcp")
+
+
+def add_food_to_diary(
+    client,
+    mfp_id: str,
+    meal: str,
+    target_date: date,
+    quantity: float = 1.0,
+    unit: str | None = None,
+) -> str | None:
+    """
+    Add a food item to the diary for a specific date and meal.
+
+    Args:
+        client: Authenticated myfitnesspal.Client instance
+        mfp_id: MyFitnessPal food item ID
+        meal: Meal name (Breakfast, Lunch, Dinner, Snacks)
+        target_date: Date to add the food entry
+        quantity: Number of servings (default 1.0)
+        unit: Optional serving unit to log against (e.g. "oz")
+
+    Returns:
+        The new entry's UUID, or None if MFP did not return one
+
+    Raises:
+        RuntimeError: If the operation fails
+    """
+    food = get_food_v2(client, mfp_id)
+    serving_size = select_serving_size(food, unit)
+
+    meal_name = meal.strip().capitalize()
+    if meal_name not in VALID_MEALS:
+        raise RuntimeError(f"Invalid meal {meal!r}. Expected one of: {', '.join(VALID_MEALS)}")
+
+    entry = {
+        "type": "food_entry",
+        "date": target_date.strftime("%Y-%m-%d"),
+        "meal_name": meal_name,
+        "servings": float(quantity),
+        "food": {"id": str(food["id"]), "version": str(food["version"])},
+        "serving_size": serving_size,
+    }
+
+    response = client.session.post(
+        f"{MFP_API_BASE}/v2/diary",
+        headers=_mfp_api_headers(client, json_body=True),
+        data=json.dumps({"items": [entry]}),
+        timeout=30,
+    )
+
+    if response.status_code not in (200, 201):
+        detail = ""
+        try:
+            body = response.json()
+            detail = body.get("error_details", {}).get("item_error") or body.get(
+                "error_description", ""
+            )
+        except Exception:
+            pass
+        raise RuntimeError(
+            f"Failed to add food to diary: HTTP {response.status_code}"
+            + (f" - {detail}" if detail else "")
+        )
+
+    logger.info(
+        f"Added food {mfp_id} ({serving_size['value']} {serving_size['unit']} "
+        f"x{quantity}) to {meal_name} for {target_date}"
+    )
+
+    # Keep the returned UUID so callers can verify or remove this exact entry
+    # through the modern webpage diary service.
+    try:
+        return response.json()["items"][0]["id"]
+    except (ValueError, KeyError, IndexError):
+        logger.warning("Entry created but MyFitnessPal returned no entry id")
+        return None
+
+
+def list_diary_entries(client, target_date: date) -> list[dict[str, str]]:
+    """
+    Read the webpage diary service and return food entries for a date.
+
+    Returns:
+        List of {"entry_id", "name", "meal"} dicts in display order.
+    """
+    date_str = target_date.strftime("%Y-%m-%d")
+    csrf = _get_csrf_token(client)
+    response = client.session.get(
+        f"{MFP_WEB_BASE}/api/services/diary/read_diary",
+        params={"entry_date": date_str, "types": "food_entry"},
+        headers=_web_headers(csrf),
+        timeout=30,
+    )
+    if response.status_code != 200:
+        raise RuntimeError(f"Could not read diary entries: HTTP {response.status_code}")
+
+    entries: list[dict[str, str]] = []
+    for raw_entry in response.json() or []:
+        if raw_entry.get("type") != "food_entry" or not raw_entry.get("id"):
+            continue
+        food = raw_entry.get("food") or {}
+        if isinstance(food, dict) and isinstance(food.get("item"), dict):
+            food = food["item"]
+        name = food.get("description", "") if isinstance(food, dict) else ""
+        entries.append(
+            {
+                "entry_id": str(raw_entry["id"]),
+                "name": str(name),
+                "meal": str(raw_entry.get("meal_name") or ""),
+            }
+        )
+    return entries
+
+
+def remove_food_entry(client, entry_id: str) -> None:
+    """
+    Delete a food diary entry by its food_entry_id.
+
+    Uses the same cookie-authenticated webpage service that creates and reads
+    modern UUID-based entries.
+    """
+    csrf = _get_csrf_token(client)
+    response = client.session.delete(
+        f"{MFP_WEB_BASE}/api/services/diary/{entry_id}",
+        headers=_web_headers(csrf),
+        timeout=30,
+    )
+    if response.status_code in (200, 204):
+        logger.info(f"Removed diary entry {entry_id}")
+        return
+    raise RuntimeError(f"Remove failed for entry {entry_id}: HTTP {response.status_code}")
+
+
+def set_water_intake(client, target_date: date, cups: float) -> None:
+    """
+    Set water intake for a specific date.
+
+    Args:
+        client: Authenticated myfitnesspal.Client instance
+        target_date: Date to set water intake
+        cups: Number of cups of water
+
+    Raises:
+        RuntimeError: If the operation fails
+    """
+    from urllib import parse
+
+    try:
+        # Get the diary page for the target date to extract CSRF token
+        date_str = target_date.strftime("%Y-%m-%d")
+        diary_url = parse.urljoin(
+            client.BASE_URL_SECURE, f"food/diary/{client.effective_username}?date={date_str}"
+        )
+
+        # Use the library's method to get the document
+        document = client._get_document_for_url(diary_url)
+
+        # Extract authenticity token
+        authenticity_token = document.xpath("(//input[@name='authenticity_token']/@value)[1]")
+        if not authenticity_token:
+            raise RuntimeError("Could not find authenticity token on diary page")
+        authenticity_token = authenticity_token[0]
+
+        # Build the URL for setting water
+        # MyFitnessPal uses /food/diary/{username}/water endpoint
+        water_url = parse.urljoin(
+            client.BASE_URL_SECURE, f"food/diary/{client.effective_username}/water"
+        )
+
+        # Prepare the data for the POST request
+        post_data = {
+            "authenticity_token": authenticity_token,
+            "date": date_str,
+            "water": str(cups),
+        }
+
+        # Set water intake
+        headers = {
+            "Referer": diary_url,
+            "Content-Type": "application/x-www-form-urlencoded",
+            "X-Requested-With": "XMLHttpRequest",
+        }
+
+        response = client.session.post(water_url, data=post_data, headers=headers)
+        response.raise_for_status()
+
+        if response.status_code != 200:
+            raise RuntimeError(f"Failed to set water: HTTP {response.status_code}")
+
+        logger.info(f"Successfully set water intake to {cups} cups for {target_date}")
+
+    except Exception as e:
+        # Don't expose internal error details to avoid leaking sensitive information
+        error_msg = str(e)
+        # Only include safe error information
+        if "HTTP" in error_msg or "status" in error_msg.lower():
+            raise RuntimeError(f"Failed to set water intake: {error_msg}")
+        else:
+            raise RuntimeError(
+                "Failed to set water intake. Please check your authentication and try again."
+            )

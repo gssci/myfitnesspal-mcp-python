@@ -470,8 +470,24 @@ myfitnesspal-mcp-python/
 │   └── store-key.ts        # One-time key management CLI
 └── src/
     └── mfp_mcp/
-        ├── __init__.py     # Package initialization
-        └── server.py       # MCP server implementation
+        ├── app.py                  # Shared FastMCP application
+        ├── config.py               # Paths, endpoints, and environment loading
+        ├── auth.py                 # Authenticated client orchestration
+        ├── browser_cookies.py      # Chromium cookie discovery/decryption
+        ├── cookie_store.py         # Persistent session-cookie storage
+        ├── credentials.py          # Credential decryption and legacy login
+        ├── formatting.py           # Date and response formatting helpers
+        ├── models.py               # Validated MCP input models
+        ├── services/
+        │   ├── diary.py            # Diary and water business operations
+        │   ├── food.py             # Search and custom-food operations
+        │   └── http.py             # Shared web/API request helpers
+        ├── tools/
+        │   ├── auth.py             # Authentication utility tool
+        │   ├── diary.py            # Diary and water MCP tools
+        │   ├── food.py             # Food MCP tools
+        │   └── profile.py          # Goals, reports, and measurement tools
+        └── server.py               # Composition and compatibility exports
 ```
 
 ## Development
@@ -495,7 +511,7 @@ pip install -e ".[dev]"
 ### Run Tests
 
 ```bash
-pytest
+make test
 ```
 
 ### Code Formatting

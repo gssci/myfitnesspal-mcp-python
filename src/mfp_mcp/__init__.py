@@ -9,4 +9,4 @@ __author__ = "Adam"
 
 from .server import mcp
 
-__all__ = ["mcp", "__version__"]
+__all__ = ["__version__", "mcp"]
