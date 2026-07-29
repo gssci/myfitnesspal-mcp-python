@@ -7,15 +7,79 @@ from ..models import (
     CreateCustomFoodInput,
     DeleteCustomFoodInput,
     GetFoodDetailsInput,
+    GetMealFoodsInput,
     ListOwnFoodsInput,
+    ResolveMealFoodInput,
     SearchFoodInput,
 )
 from ..services.food import (
     create_custom_food,
     delete_custom_food,
+    get_meal_foods,
     list_own_foods,
+    resolve_meal_food,
     search_foods_web,
 )
+
+
+@mcp.tool(
+    name="mfp_get_meal_foods",
+    annotations={
+        "title": "Get Recent and Frequent Meal Foods",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+async def mfp_get_meal_foods(params: GetMealFoodsInput) -> str:
+    """Get recent and frequent foods for a specific meal.
+
+    Call this before a global food search when preparing to log food. Meal
+    numbers are 0=Breakfast, 1=Lunch, 2=Dinner, and 3=Snacks. Results contain
+    history IDs, names, prior quantities/servings, verification status, and
+    available servings. If the requested food matches one of these entries,
+    pass its history_id to mfp_resolve_meal_food. History IDs are not accepted
+    directly by mfp_add_food_to_diary.
+    """
+    try:
+        client = get_mfp_client()
+        lists = get_meal_foods(client, params.meal, params.limit_per_list)
+        data = {
+            "meal": params.meal,
+            "recent_count": len(lists["recent"]),
+            "frequent_count": len(lists["frequent"]),
+            **lists,
+        }
+        return format_response(data, params.response_format, "Recent and Frequent Meal Foods")
+    except Exception as e:
+        return f"Error getting meal foods: {e!s}"
+
+
+@mcp.tool(
+    name="mfp_resolve_meal_food",
+    annotations={
+        "title": "Resolve and Validate Meal Food",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)
+async def mfp_resolve_meal_food(params: ResolveMealFoodInput) -> str:
+    """Resolve a meal-history item to an add-ready ID and validate nutrition.
+
+    Use only with a history_id returned by mfp_get_meal_foods for the same
+    meal. A resolved result includes the modern mfp_id, servings, calories,
+    verification state, and nutrition_plausibility. Do not add an item whose
+    status is implausible. If resolved=false, fall back to mfp_search_food.
+    """
+    try:
+        client = get_mfp_client()
+        result = resolve_meal_food(client, params.history_id, params.meal)
+        return format_response(result, params.response_format, "Resolved Meal Food")
+    except Exception as e:
+        return f"Error resolving meal food: {e!s}"
 
 
 @mcp.tool(
@@ -33,9 +97,10 @@ async def mfp_search_food(params: SearchFoodInput) -> str:
     Search the MyFitnessPal food database for food items.
 
     Returns matching foods with name, brand, primary and available serving sizes,
-    whether a gram serving is supported, calories, and MFP ID. When logging an
-    amount provided in grams, prefer a semantically equivalent result whose
-    supports_grams field is true.
+    whether a gram serving is supported, calories, verification state,
+    nutrition plausibility, and MFP ID. When logging an amount provided in
+    grams, prefer a semantically equivalent result whose supports_grams field is
+    true. Never use a result whose nutrition_plausibility status is implausible.
 
     Args:
         params: SearchFoodInput containing:

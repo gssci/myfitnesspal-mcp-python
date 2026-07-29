@@ -143,10 +143,12 @@ async def mfp_add_food_to_diary(params: AddFoodToDiaryInput) -> str:
     """
     Add an exact, user-facing amount of food to the MyFitnessPal diary.
 
-    This tool adds a food entry to your diary. You can search for foods using
-    mfp_search_food to find the food ID. ``amount`` is always expressed in
-    ``unit``; it is NOT a serving multiplier. The server converts it to the
-    database food's serving count.
+    This tool adds a food entry to your diary. Obtain the modern food ID from
+    mfp_resolve_meal_food (preferred history-first path) or mfp_search_food
+    (fallback). ``amount`` is always expressed in ``unit``; it is NOT a serving
+    multiplier. The server converts it to the database food's serving count.
+    The write is refused when the database record has physically implausible
+    energy density.
 
     Correct examples:
       - 250 grams: amount=250, unit="g" (or "grammi")
@@ -160,7 +162,7 @@ async def mfp_add_food_to_diary(params: AddFoodToDiaryInput) -> str:
 
     Args:
         params: AddFoodToDiaryInput containing:
-            - mfp_id (str): MyFitnessPal food item ID (from mfp_search_food)
+            - mfp_id (str): Modern food ID from resolution or fallback search
             - meal (str): 'Breakfast', 'Lunch', 'Dinner', or 'Snacks'
             - date (str, optional): Date in YYYY-MM-DD format, defaults to today
             - amount (float): Physical amount expressed in unit (default: 1.0)

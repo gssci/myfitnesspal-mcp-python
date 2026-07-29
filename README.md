@@ -7,6 +7,8 @@ A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that e
 | Tool | Type | Description |
 |------|------|-------------|
 | `mfp_get_diary` | Read | Get food diary entries for any date |
+| `mfp_get_meal_foods` | Read | Get meal-specific recent and frequent foods |
+| `mfp_resolve_meal_food` | Read | Resolve and nutrition-check a history item for logging |
 | `mfp_search_food` | Read | Search the MyFitnessPal food database |
 | `mfp_get_food_details` | Read | Get detailed nutrition info for a food item |
 | `mfp_add_food_to_diary` | Write | Add a food item to your diary for a specific meal and date |
@@ -35,6 +37,17 @@ The add-food tool accepts a user-facing physical `amount` and `unit`, then conve
 them to MFP's internal serving multiplier. For example, 250 g of a food whose database
 serving is 60 g is sent as one entry with `servings=4.16666667`. Callers should never
 split that amount into 100 + 100 + 50 or pass grams as a serving count.
+
+Food logging is history-first: `mfp_get_meal_foods` reads the same recent and
+frequent lists shown by MyFitnessPal for Breakfast (0), Lunch (1), Dinner (2),
+or Snacks (3). A matching `history_id` is converted to the modern API ID by
+`mfp_resolve_meal_food`; only missing or unresolvable foods need a global
+`mfp_search_food` call.
+
+Search and resolution results include `nutrition_plausibility`. The add tool
+also enforces this check and refuses records above a generous physical ceiling
+of 1,000 kcal per 100 g/ml, catching database mistakes such as 800 kcal per
+gram before they reach the diary.
 
 **Custom-food writes** (`mfp_create_custom_food`, `mfp_list_own_foods`,
 `mfp_delete_custom_food`) use a different endpoint family: MFP's v2 API exposes no
@@ -656,6 +669,21 @@ Search the MyFitnessPal food database.
 - `limit` (optional): Max results (default 10, max 50)
 - `response_format`: "markdown" or "json"
 
+### mfp_get_meal_foods
+Get recent and frequent foods for one meal before doing a global search.
+- `meal` (required): 0=Breakfast, 1=Lunch, 2=Dinner, 3=Snacks
+- `limit_per_list` (optional): Maximum entries from each list (default 25, max 50)
+- `response_format`: "markdown" or "json"
+
+### mfp_resolve_meal_food
+Convert a matching history item to a modern add-ready ID and check its nutrition.
+- `history_id` (required): ID returned by `mfp_get_meal_foods`
+- `meal` (required): The same 0–3 meal number used for the history lookup
+- `response_format`: "markdown" or "json"
+
+If `resolved=false`, use `mfp_search_food`. Never pass a `history_id` directly
+to `mfp_add_food_to_diary`.
+
 ### mfp_get_food_details
 Get detailed nutrition for a food item.
 - `mfp_id` (required): MyFitnessPal food ID from search results
@@ -663,7 +691,7 @@ Get detailed nutrition for a food item.
 
 ### mfp_add_food_to_diary
 Add a measured amount of food to your diary for a specific meal and date.
-- `mfp_id` (required): MyFitnessPal food ID from search results (use `mfp_search_food` first)
+- `mfp_id` (required): Modern food ID from `mfp_resolve_meal_food` or `mfp_search_food`
 - `meal` (optional): Meal name - "Breakfast", "Lunch", "Dinner", or "Snacks" (default: "Breakfast")
 - `date` (optional): YYYY-MM-DD format (default: today)
 - `amount` (optional): Physical amount expressed in `unit` (default: 1.0). This is not
@@ -672,12 +700,14 @@ Add a measured amount of food to your diary for a specific meal and date.
   (default: `serving`). Italian aliases such as `grammi` and `porzioni` are accepted.
 
 **Example workflow:**
-1. Use `mfp_search_food` to find a food item and get its `mfp_id`
+1. Use `mfp_get_meal_foods`; resolve a matching history item with
+   `mfp_resolve_meal_food`. Use `mfp_search_food` only if needed.
 2. Add 250 g in one call:
    `{"params":{"mfp_id":"27769042718141","meal":"Snacks","amount":250,"unit":"g"}}`
 
 The response reports the requested amount, selected database serving, calculated
 serving count, and entry ID. Unknown units fail closed without writing an entry.
+Nutritionally implausible records also fail closed without writing an entry.
 For meals containing several foods, call the tool once per distinct food ID and
 check each response independently. Calls may be parallel; each call represents
 one diary entry.

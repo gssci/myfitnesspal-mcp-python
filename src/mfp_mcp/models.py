@@ -44,6 +44,51 @@ class SearchFoodInput(BaseModel):
     )
 
 
+class GetMealFoodsInput(BaseModel):
+    """Input model for meal-specific recent and frequent foods."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    meal: int = Field(
+        ...,
+        description="Meal number: 0=Breakfast, 1=Lunch, 2=Dinner, 3=Snacks.",
+        ge=0,
+        le=3,
+    )
+    limit_per_list: int = Field(
+        default=25,
+        description="Maximum recent foods and frequent foods to return separately.",
+        ge=1,
+        le=50,
+    )
+    response_format: ResponseFormat = Field(
+        default=ResponseFormat.MARKDOWN,
+        description="Output format: 'markdown' for human-readable or 'json' for structured data",
+    )
+
+
+class ResolveMealFoodInput(BaseModel):
+    """Resolve a meal-history ID to an add-ready modern food ID."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    history_id: str = Field(
+        ...,
+        description="History ID returned by mfp_get_meal_foods.",
+        min_length=1,
+    )
+    meal: int = Field(
+        ...,
+        description="Meal number used for the history lookup: 0=Breakfast, 1=Lunch, 2=Dinner, 3=Snacks.",
+        ge=0,
+        le=3,
+    )
+    response_format: ResponseFormat = Field(
+        default=ResponseFormat.MARKDOWN,
+        description="Output format: 'markdown' for human-readable or 'json' for structured data",
+    )
+
+
 class GetFoodDetailsInput(BaseModel):
     """Input model for getting food item details."""
 
@@ -208,7 +253,10 @@ class AddFoodToDiaryInput(BaseModel):
 
     mfp_id: str = Field(
         ...,
-        description="MyFitnessPal food item ID (obtained from mfp_search_food)",
+        description=(
+            "Modern MyFitnessPal food item ID obtained from mfp_resolve_meal_food "
+            "or mfp_search_food. Do not pass a meal-history history_id."
+        ),
         min_length=1,
     )
     meal: str = Field(

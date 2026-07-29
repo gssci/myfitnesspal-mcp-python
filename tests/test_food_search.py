@@ -76,6 +76,12 @@ def test_search_foods_web_parses_food_id_and_summary():
             "available_servings": ["4 oz", "100 grammi"],
             "supports_grams": True,
             "calories": 110,
+            "verified": False,
+            "nutrition_plausibility": {
+                "status": "plausible",
+                "calories_per_100_g_or_ml": 110.0,
+                "warnings": [],
+            },
             "mfp_id": "88518932032557",
         }
     ]
@@ -113,3 +119,21 @@ def test_search_marks_food_without_gram_serving():
 def test_search_foods_web_allows_zero_results():
     results = server.search_foods_web(_Client(_search_page()), "chicken breast")
     assert results == []
+
+
+def test_search_flags_impossible_calories_per_gram():
+    item = {
+        "item": {
+            "id": "bad-oil",
+            "description": "Olive oil",
+            "serving_sizes": [{"value": 1, "unit": "gram", "nutrition_multiplier": 1}],
+            "nutritional_contents": {"energy": {"unit": "calories", "value": 800}},
+        }
+    }
+
+    result = server.search_foods_web(_Client(_search_page("olive oil", items=[item])), "olive oil")[
+        0
+    ]
+
+    assert result["nutrition_plausibility"]["status"] == "implausible"
+    assert result["nutrition_plausibility"]["calories_per_100_g_or_ml"] == 80000

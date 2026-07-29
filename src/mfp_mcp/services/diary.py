@@ -6,10 +6,11 @@ from datetime import date
 
 from ..config import MFP_API_BASE, MFP_WEB_BASE, VALID_MEALS
 from ..units import normalize_unit
-from .food import get_food_v2
+from .food import assess_food_plausibility, get_food_v2
 from .http import _get_csrf_token, _mfp_api_headers, _web_headers
 
 logger = logging.getLogger("mfp_mcp")
+
 
 def resolve_food_amount(
     food: dict,
@@ -32,11 +33,7 @@ def resolve_food_amount(
         servings = float(amount)
     else:
         chosen = next(
-            (
-                size
-                for size in serving_sizes
-                if normalize_unit(str(size.get("unit", ""))) == wanted
-            ),
+            (size for size in serving_sizes if normalize_unit(str(size.get("unit", ""))) == wanted),
             None,
         )
 
@@ -118,6 +115,12 @@ def add_food_to_diary(
         RuntimeError: If the operation fails
     """
     food = get_food_v2(client, mfp_id)
+    plausibility = assess_food_plausibility(food)
+    if plausibility["status"] == "implausible":
+        raise RuntimeError(
+            "Refusing to add a nutritionally implausible database entry: "
+            + " ".join(plausibility["warnings"])
+        )
     serving_size, servings = resolve_food_amount(food, amount, unit)
 
     meal_name = meal.strip().capitalize()
