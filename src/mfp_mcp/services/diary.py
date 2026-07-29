@@ -5,10 +5,91 @@ import logging
 from datetime import date
 
 from ..config import MFP_API_BASE, MFP_WEB_BASE, VALID_MEALS
-from .food import get_food_v2, select_serving_size
+from ..units import normalize_unit
+from .food import get_food_v2
 from .http import _get_csrf_token, _mfp_api_headers, _web_headers
 
 logger = logging.getLogger("mfp_mcp")
+
+def resolve_food_amount(
+    food: dict,
+    amount: float,
+    unit: str,
+) -> tuple[dict, float]:
+    """Convert a user-facing amount into an MFP serving size and serving count.
+
+    For example, a request for 250 g against a database serving of 60 g is
+    converted to 250 / 60 = 4.1667 servings. Unknown units fail closed instead
+    of silently falling back to a different serving.
+    """
+    serving_sizes = food.get("serving_sizes") or []
+    if not serving_sizes:
+        raise RuntimeError(f"Food {food.get('id')} has no serving sizes")
+
+    wanted = normalize_unit(unit)
+    if wanted == "serving":
+        chosen = serving_sizes[0]
+        servings = float(amount)
+    else:
+        chosen = next(
+            (
+                size
+                for size in serving_sizes
+                if normalize_unit(str(size.get("unit", ""))) == wanted
+            ),
+            None,
+        )
+
+        # Some entries expose gram_weight even when the serving is named
+        # "scoop", "piece", etc. That still permits exact gram conversion.
+        if chosen is None and wanted in {"g", "kg"}:
+            chosen = next(
+                (size for size in serving_sizes if float(size.get("gram_weight") or 0) > 0),
+                None,
+            )
+
+        if chosen is None:
+            available = ", ".join(
+                f"{size.get('value')} {size.get('unit')}" for size in serving_sizes
+            )
+            raise RuntimeError(
+                f"Unit {unit!r} is not available for this food. Available servings: {available}"
+            )
+
+        chosen_unit = normalize_unit(str(chosen.get("unit", "")))
+        if wanted in {"g", "kg"}:
+            requested_grams = float(amount) * (1000 if wanted == "kg" else 1)
+            # MFP's gram_weight is not consistently a weight: for some foods it
+            # mirrors nutrition_multiplier (e.g. a 60 g serving reports 1.0).
+            # An explicit g/kg serving value is therefore authoritative.
+            if chosen_unit == "g":
+                units_per_serving = float(chosen["value"])
+            elif chosen_unit == "kg":
+                units_per_serving = float(chosen["value"]) * 1000
+            elif chosen.get("gram_weight"):
+                units_per_serving = float(chosen["gram_weight"])
+            else:
+                raise RuntimeError(f"Cannot convert serving {chosen.get('unit')!r} to grams")
+            servings = requested_grams / units_per_serving
+        else:
+            # For 2 cups against a database serving of 0.5 cup, log 4 servings.
+            serving_value = float(chosen.get("value") or 0)
+            if serving_value <= 0:
+                raise RuntimeError("The selected serving has an invalid value")
+            servings = float(amount) / serving_value
+
+    if not 0 < servings <= 5000:
+        raise RuntimeError(
+            f"Calculated serving count {servings:.4g} is outside the safe range (0, 5000]. "
+            "Check the requested amount and unit."
+        )
+
+    diary_serving = {
+        "value": chosen["value"],
+        "unit": chosen["unit"],
+        "nutrition_multiplier": chosen["nutrition_multiplier"],
+    }
+    return diary_serving, servings
 
 
 def add_food_to_diary(
@@ -16,9 +97,9 @@ def add_food_to_diary(
     mfp_id: str,
     meal: str,
     target_date: date,
-    quantity: float = 1.0,
-    unit: str | None = None,
-) -> str | None:
+    amount: float = 1.0,
+    unit: str = "serving",
+) -> dict:
     """
     Add a food item to the diary for a specific date and meal.
 
@@ -27,17 +108,17 @@ def add_food_to_diary(
         mfp_id: MyFitnessPal food item ID
         meal: Meal name (Breakfast, Lunch, Dinner, Snacks)
         target_date: Date to add the food entry
-        quantity: Number of servings (default 1.0)
-        unit: Optional serving unit to log against (e.g. "oz")
+        amount: Physical amount expressed in ``unit`` (e.g. 250)
+        unit: Requested unit (e.g. "g", "oz", "cup", or "serving")
 
     Returns:
-        The new entry's UUID, or None if MFP did not return one
+        The entry id and the resolved MFP serving details
 
     Raises:
         RuntimeError: If the operation fails
     """
     food = get_food_v2(client, mfp_id)
-    serving_size = select_serving_size(food, unit)
+    serving_size, servings = resolve_food_amount(food, amount, unit)
 
     meal_name = meal.strip().capitalize()
     if meal_name not in VALID_MEALS:
@@ -47,7 +128,7 @@ def add_food_to_diary(
         "type": "food_entry",
         "date": target_date.strftime("%Y-%m-%d"),
         "meal_name": meal_name,
-        "servings": float(quantity),
+        "servings": servings,
         "food": {"id": str(food["id"]), "version": str(food["version"])},
         "serving_size": serving_size,
     }
@@ -75,16 +156,28 @@ def add_food_to_diary(
 
     logger.info(
         f"Added food {mfp_id} ({serving_size['value']} {serving_size['unit']} "
-        f"x{quantity}) to {meal_name} for {target_date}"
+        f"x{servings:.6g}; requested {amount} {unit}) to {meal_name} for {target_date}"
     )
 
     # Keep the returned UUID so callers can verify or remove this exact entry
     # through the modern webpage diary service.
     try:
-        return response.json()["items"][0]["id"]
+        entry_id = response.json()["items"][0]["id"]
     except (ValueError, KeyError, IndexError):
         logger.warning("Entry created but MyFitnessPal returned no entry id")
-        return None
+        entry_id = None
+
+    return {
+        "entry_id": entry_id,
+        "food_name": food.get("description", "Food item"),
+        "requested_amount": float(amount),
+        "requested_unit": unit,
+        "database_serving": {
+            "value": serving_size["value"],
+            "unit": serving_size["unit"],
+        },
+        "servings": round(servings, 8),
+    }
 
 
 def list_diary_entries(client, target_date: date) -> list[dict[str, str]]:

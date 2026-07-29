@@ -32,8 +32,10 @@ async def mfp_search_food(params: SearchFoodInput) -> str:
     """
     Search the MyFitnessPal food database for food items.
 
-    Returns a list of matching foods with their name, brand, serving size,
-    calories, and MFP ID (which can be used with mfp_get_food_details).
+    Returns matching foods with name, brand, primary and available serving sizes,
+    whether a gram serving is supported, calories, and MFP ID. When logging an
+    amount provided in grams, prefer a semantically equivalent result whose
+    supports_grams field is true.
 
     Args:
         params: SearchFoodInput containing:

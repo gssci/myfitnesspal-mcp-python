@@ -141,18 +141,30 @@ async def mfp_get_water(params: GetWaterInput) -> str:
 )
 async def mfp_add_food_to_diary(params: AddFoodToDiaryInput) -> str:
     """
-    Add a food item to your MyFitnessPal food diary for a specific date and meal.
+    Add an exact, user-facing amount of food to the MyFitnessPal diary.
 
     This tool adds a food entry to your diary. You can search for foods using
-    mfp_search_food to find the food ID (mfp_id) needed for this tool.
+    mfp_search_food to find the food ID. ``amount`` is always expressed in
+    ``unit``; it is NOT a serving multiplier. The server converts it to the
+    database food's serving count.
+
+    Correct examples:
+      - 250 grams: amount=250, unit="g" (or "grammi")
+      - 1.5 servings: amount=1.5, unit="serving"
+      - 2 cups: amount=2, unit="cup"
+
+    Normally make one call for the complete amount of one food. A meal with
+    three different foods should use three calls, one per food. If splitting a
+    single food is genuinely required, the physical amounts across calls must
+    add up exactly to the request. Unknown units fail without writing anything.
 
     Args:
         params: AddFoodToDiaryInput containing:
             - mfp_id (str): MyFitnessPal food item ID (from mfp_search_food)
-            - meal (str): Meal name - 'Breakfast', 'Lunch', 'Dinner', or 'Snacks' (default: 'Breakfast')
+            - meal (str): 'Breakfast', 'Lunch', 'Dinner', or 'Snacks'
             - date (str, optional): Date in YYYY-MM-DD format, defaults to today
-            - quantity (float): Number of servings (default: 1.0)
-            - unit (str, optional): Unit/serving size (e.g., '1 cup', '100g')
+            - amount (float): Physical amount expressed in unit (default: 1.0)
+            - unit (str): 'g', 'kg', 'oz', 'ml', serving name, or 'serving'
 
     Returns:
         str: Confirmation message with details of the added food entry
@@ -167,33 +179,26 @@ async def mfp_add_food_to_diary(params: AddFoodToDiaryInput) -> str:
             meal = "Snacks"
 
         # Add food to diary
-        entry_id = add_food_to_diary(
+        result = add_food_to_diary(
             client=client,
             mfp_id=params.mfp_id,
             meal=meal,
             target_date=target_date,
-            quantity=params.quantity,
+            amount=params.amount,
             unit=params.unit,
         )
-
-        # Get food details for confirmation
-        try:
-            food_item = client.get_food_item_details(params.mfp_id)
-            food_name = getattr(food_item, "description", "Unknown Food")
-        except Exception:
-            food_name = "Food item"
 
         return json.dumps(
             {
                 "success": True,
-                "message": f"Successfully added {food_name} to {meal}",
-                "entry_id": entry_id,
+                "message": (
+                    f"Successfully added {result['requested_amount']:g} "
+                    f"{result['requested_unit']} of {result['food_name']} to {meal}"
+                ),
                 "date": str(target_date),
                 "meal": meal,
                 "food_id": params.mfp_id,
-                "food_name": food_name,
-                "quantity": params.quantity,
-                "unit": params.unit,
+                **result,
             },
             indent=2,
         )

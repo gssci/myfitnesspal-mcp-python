@@ -23,7 +23,8 @@ def test_add_food_to_snacks_is_visible_and_removable():
                     mfp_id=food["mfp_id"],
                     meal="Snacks",
                     date=str(target_date),
-                    quantity=0.01,
+                    amount=0.01,
+                    unit="serving",
                 )
             )
         )

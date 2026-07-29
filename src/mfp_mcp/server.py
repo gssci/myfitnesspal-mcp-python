@@ -7,7 +7,7 @@ the historical ``mfp_mcp.server`` import surface stable for callers and tests.
 # ruff: noqa: F401 - this module deliberately preserves legacy re-exports.
 
 from .app import mcp
-from .auth import _verify_cookies_and_format, get_mfp_client
+from .auth import _verify_cookies_and_format, clear_cached_mfp_client, get_mfp_client
 from .browser_cookies import (
     _CHROMIUM_BROWSER_ALIASES,
     _has_real_mfp_session,
@@ -61,6 +61,7 @@ from .services.diary import (
     add_food_to_diary,
     list_diary_entries,
     remove_food_entry,
+    resolve_food_amount,
     set_water_intake,
 )
 from .services.food import (

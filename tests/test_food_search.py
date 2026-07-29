@@ -56,7 +56,10 @@ def test_search_foods_web_parses_food_id_and_summary():
                 "id": "88518932032557",
                 "description": "Chicken. Breast",
                 "brand_name": "Chicken breast",
-                "serving_sizes": [{"value": 4, "unit": "oz"}],
+                "serving_sizes": [
+                    {"value": 4, "unit": "oz"},
+                    {"value": 100, "unit": "grammi"},
+                ],
                 "nutritional_contents": {"energy": {"unit": "calories", "value": 110}},
             }
         }
@@ -70,6 +73,8 @@ def test_search_foods_web_parses_food_id_and_summary():
             "name": "Chicken. Breast",
             "brand": "Chicken breast",
             "serving": "4 oz",
+            "available_servings": ["4 oz", "100 grammi"],
+            "supports_grams": True,
             "calories": 110,
             "mfp_id": "88518932032557",
         }
@@ -90,6 +95,19 @@ def test_search_foods_web_honors_limit():
         _Client(_search_page(items=[item, item])), "chicken breast", 1
     )
     assert len(results) == 1
+
+
+def test_search_marks_food_without_gram_serving():
+    item = {
+        "item": {
+            "id": "1",
+            "description": "One apple",
+            "serving_sizes": [{"value": 1, "unit": "piece"}],
+            "nutritional_contents": {},
+        }
+    }
+    result = server.search_foods_web(_Client(_search_page("apple", items=[item])), "apple")[0]
+    assert result["supports_grams"] is False
 
 
 def test_search_foods_web_allows_zero_results():

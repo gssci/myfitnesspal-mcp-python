@@ -2,6 +2,7 @@
 
 import logging
 from datetime import date
+from threading import Lock
 
 from .browser_cookies import (
     _has_real_mfp_session,
@@ -14,9 +15,11 @@ from .credentials import (
 )
 
 logger = logging.getLogger("mfp_mcp")
+_client_lock = Lock()
+_cached_client = None
 
 
-def get_mfp_client():
+def _create_mfp_client():
     """
     Get an authenticated MyFitnessPal client.
 
@@ -140,6 +143,30 @@ def get_mfp_client():
         )
 
 
+def get_mfp_client():
+    """Return one authenticated client per MCP process.
+
+    Tool calls often arrive in groups (for example, one search per food in a
+    meal). Reusing the client avoids reloading and live-validating the same
+    cookies for every item. The lock also prevents parallel first calls from
+    authenticating several times concurrently.
+    """
+    global _cached_client
+    if _cached_client is not None:
+        return _cached_client
+    with _client_lock:
+        if _cached_client is None:
+            _cached_client = _create_mfp_client()
+        return _cached_client
+
+
+def clear_cached_mfp_client() -> None:
+    """Invalidate the process-local client after refreshing authentication."""
+    global _cached_client
+    with _client_lock:
+        _cached_client = None
+
+
 def _verify_cookies_and_format(cookies: dict[str, str], source: str) -> str:
     """Verify cookies via a live MFP round-trip, then persist on success.
 
@@ -166,6 +193,7 @@ def _verify_cookies_and_format(cookies: dict[str, str], source: str) -> str:
             f"(cookies.json was NOT overwritten.)"
         )
     save_cookies(cookies)
+    clear_cached_mfp_client()
     return (
         f"Successfully extracted and verified {len(cookies)} cookies "
         f"from {source}. Authentication is now working."

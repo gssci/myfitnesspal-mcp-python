@@ -10,6 +10,7 @@ from lxml import html as lxml_html
 from ..browser_cookies import try_chromium_browsers_for_session_cookies
 from ..config import MFP_API_BASE, MFP_BROWSER_USER_AGENT, MFP_FOOD_SEARCH_PAGE, MFP_WEB_BASE
 from ..cookie_store import dict_to_cookiejar, save_cookies
+from ..units import is_gram_unit
 from .http import _api_error_detail, _get_csrf_token, _mfp_api_headers, _web_headers
 
 logger = logging.getLogger("mfp_mcp")
@@ -193,6 +194,12 @@ def search_foods_web(client, query: str, limit: int = 10) -> list[dict[str, Any]
                 "name": item.get("description"),
                 "brand": item.get("brand_name"),
                 "serving": _format_serving_size(serving_sizes[0]) if serving_sizes else None,
+                "available_servings": [
+                    _format_serving_size(serving) for serving in serving_sizes[:5]
+                ],
+                "supports_grams": any(
+                    is_gram_unit(str(serving.get("unit", ""))) for serving in serving_sizes
+                ),
                 "calories": energy.get("value"),
                 "mfp_id": str(item["id"]),
             }

@@ -31,6 +31,11 @@ MyFitnessPal has no public API. Reads here are scraped from the website via
 writes go through MFP's internal v2 JSON API** — the same one their web client uses,
 authenticated with your existing session token.
 
+The add-food tool accepts a user-facing physical `amount` and `unit`, then converts
+them to MFP's internal serving multiplier. For example, 250 g of a food whose database
+serving is 60 g is sent as one entry with `servings=4.16666667`. Callers should never
+split that amount into 100 + 100 + 50 or pass grams as a serving count.
+
 **Custom-food writes** (`mfp_create_custom_food`, `mfp_list_own_foods`,
 `mfp_delete_custom_food`) use a different endpoint family: MFP's v2 API exposes no
 custom-food create, so these call the same cookie-authenticated web endpoints their
@@ -657,16 +662,25 @@ Get detailed nutrition for a food item.
 - `response_format`: "markdown" or "json"
 
 ### mfp_add_food_to_diary
-Add a food item to your diary for a specific meal and date.
+Add a measured amount of food to your diary for a specific meal and date.
 - `mfp_id` (required): MyFitnessPal food ID from search results (use `mfp_search_food` first)
 - `meal` (optional): Meal name - "Breakfast", "Lunch", "Dinner", or "Snacks" (default: "Breakfast")
 - `date` (optional): YYYY-MM-DD format (default: today)
-- `quantity` (optional): Number of servings (default: 1.0)
-- `unit` (optional): Unit/serving size description (e.g., "1 cup", "100g")
+- `amount` (optional): Physical amount expressed in `unit` (default: 1.0). This is not
+  the database serving multiplier.
+- `unit` (optional): `g`, `kg`, `oz`, `ml`, an available serving name, or `serving`
+  (default: `serving`). Italian aliases such as `grammi` and `porzioni` are accepted.
 
 **Example workflow:**
 1. Use `mfp_search_food` to find a food item and get its `mfp_id`
-2. Use `mfp_add_food_to_diary` with the `mfp_id` to add it to your diary
+2. Add 250 g in one call:
+   `{"params":{"mfp_id":"27769042718141","meal":"Snacks","amount":250,"unit":"g"}}`
+
+The response reports the requested amount, selected database serving, calculated
+serving count, and entry ID. Unknown units fail closed without writing an entry.
+For meals containing several foods, call the tool once per distinct food ID and
+check each response independently. Calls may be parallel; each call represents
+one diary entry.
 
 ### mfp_create_custom_food
 Create a private custom food in your account. Returns the new food's `id`, which

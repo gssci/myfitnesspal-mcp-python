@@ -202,7 +202,7 @@ class GetReportInput(BaseModel):
 
 
 class AddFoodToDiaryInput(BaseModel):
-    """Input model for adding food to diary."""
+    """Add a measured amount of food to the diary."""
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -220,15 +220,23 @@ class AddFoodToDiaryInput(BaseModel):
         description="Date in YYYY-MM-DD format. Defaults to today if not specified.",
         pattern=r"^\d{4}-\d{2}-\d{2}$",
     )
-    quantity: float = Field(
+    amount: float = Field(
         default=1.0,
-        description="Quantity/servings (e.g., 1.5 for 1.5 servings)",
+        description=(
+            "Physical amount expressed in `unit`, NOT the number of database servings. "
+            "Example: to log 250 grams, pass amount=250 and unit='g'."
+        ),
         gt=0,
-        le=100,
+        le=5000,
     )
-    unit: str | None = Field(
-        default=None,
-        description="Unit/serving size description (e.g., '1 cup', '100g'). If not provided, uses default serving size from food item.",
+    unit: str = Field(
+        default="serving",
+        description=(
+            "Unit for `amount`: use 'g', 'kg', 'oz', 'ml', an available serving "
+            "name, or 'serving'. Example: amount=250, unit='g'. Italian aliases "
+            "such as 'grammi' and 'porzioni' are accepted."
+        ),
+        min_length=1,
     )
 
 
