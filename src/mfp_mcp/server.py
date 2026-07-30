@@ -76,10 +76,12 @@ from .services.food import (
     delete_custom_food,
     get_food_v2,
     get_meal_foods,
+    invalidate_meal_food_cache,
     list_own_foods,
     resolve_meal_food,
     search_foods_web,
     select_serving_size,
+    serving_capabilities,
 )
 from .services.http import (
     _api_error_detail,
@@ -112,6 +114,31 @@ from .tools.profile import (
     mfp_set_goals,
     mfp_set_measurement,
 )
+
+ESSENTIAL_TOOL_NAMES = frozenset(
+    {
+        "refresh_browser_cookies",
+        "mfp_get_diary",
+        "mfp_add_food_to_diary",
+        "mfp_remove_food_from_diary",
+        "mfp_get_meal_foods",
+        "mfp_resolve_meal_food",
+        "mfp_search_food",
+        "mfp_get_food_details",
+        "mfp_get_report",
+    }
+)
+
+
+def _keep_essential_tools() -> None:
+    """Limit the advertised MCP surface while preserving Python re-exports."""
+    registered = mcp._tool_manager.list_tools()
+    for tool in registered:
+        if tool.name not in ESSENTIAL_TOOL_NAMES:
+            mcp.remove_tool(tool.name)
+
+
+_keep_essential_tools()
 
 
 def main() -> None:

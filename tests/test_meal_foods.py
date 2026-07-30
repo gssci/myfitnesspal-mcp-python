@@ -64,6 +64,7 @@ def test_parse_history_fragment_extracts_add_selection_metadata():
             "previous_serving": "10 g",
             "available_servings": ["10 g", "1 grammo", "1 ounce"],
             "supports_grams": True,
+            "supports_count": False,
         }
     ]
 
@@ -71,11 +72,25 @@ def test_parse_history_fragment_extracts_add_selection_metadata():
 def test_get_meal_foods_loads_recent_and_frequent_for_meal():
     client = _Client()
 
-    result = server.get_meal_foods(client, meal=1, limit_per_list=5)
+    result = server.get_meal_foods(client, meal=1)
 
     assert result["recent"][0]["source"] == "recent"
     assert result["frequent"][0]["source"] == "frequent"
     assert [request[1]["data"]["meal"] for request in client.session.requests] == [1, 1]
+
+
+def test_get_meal_foods_reuses_short_lived_cache():
+    client = _Client()
+
+    first = server.get_meal_foods(client, meal=2)
+    second = server.get_meal_foods(client, meal=2)
+
+    assert second == first
+    assert len(client.session.requests) == 2
+
+    server.invalidate_meal_food_cache(client)
+    server.get_meal_foods(client, meal=2)
+    assert len(client.session.requests) == 4
 
 
 def test_assess_food_plausibility_allows_normal_olive_oil():
@@ -118,6 +133,7 @@ def test_resolve_meal_food_returns_checked_modern_id(monkeypatch):
 
     assert result["resolved"] is True
     assert result["mfp_id"] == "97065782668333"
+    assert result["serving_options"] == [{"amount": 10, "unit": "g"}]
     assert result["nutrition_plausibility"]["status"] == "plausible"
 
 

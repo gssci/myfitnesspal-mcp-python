@@ -33,7 +33,7 @@ class SearchFoodInput(BaseModel):
         max_length=200,
     )
     limit: int = Field(
-        default=10,
+        default=15,
         description="Maximum number of results to return",
         ge=1,
         le=50,
@@ -54,12 +54,6 @@ class GetMealFoodsInput(BaseModel):
         description="Meal number: 0=Breakfast, 1=Lunch, 2=Dinner, 3=Snacks.",
         ge=0,
         le=3,
-    )
-    limit_per_list: int = Field(
-        default=25,
-        description="Maximum recent foods and frequent foods to return separately.",
-        ge=1,
-        le=50,
     )
     response_format: ResponseFormat = Field(
         default=ResponseFormat.MARKDOWN,
@@ -260,7 +254,7 @@ class AddFoodToDiaryInput(BaseModel):
         min_length=1,
     )
     meal: str = Field(
-        default="Breakfast",
+        ...,
         description="Meal name (e.g., 'Breakfast', 'Lunch', 'Dinner', 'Snacks')",
     )
     date: str | None = Field(
@@ -269,7 +263,7 @@ class AddFoodToDiaryInput(BaseModel):
         pattern=r"^\d{4}-\d{2}-\d{2}$",
     )
     amount: float = Field(
-        default=1.0,
+        ...,
         description=(
             "Physical amount expressed in `unit`, NOT the number of database servings. "
             "Example: to log 250 grams, pass amount=250 and unit='g'."
@@ -278,11 +272,11 @@ class AddFoodToDiaryInput(BaseModel):
         le=5000,
     )
     unit: str = Field(
-        default="serving",
+        ...,
         description=(
-            "Unit for `amount`: use 'g', 'kg', 'oz', 'ml', an available serving "
-            "name, or 'serving'. Example: amount=250, unit='g'. Italian aliases "
-            "such as 'grammi' and 'porzioni' are accepted."
+            "Physical unit for amount. Use 'g' for weights, 'count' for whole "
+            "items such as 2 fruits/eggs, an available serving name when explicitly "
+            "requested, or 'serving' only for an explicit portion count."
         ),
         min_length=1,
     )

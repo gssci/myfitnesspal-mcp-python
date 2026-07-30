@@ -36,21 +36,7 @@ from ..services.diary import (
     },
 )
 async def mfp_get_diary(params: GetDiaryInput) -> str:
-    """
-    Get the food diary for a specific date including all meals and their nutritional information.
-
-    Returns meals (Breakfast, Lunch, Dinner, Snacks) with each food entry's name,
-    quantity, and complete nutrition breakdown (calories, protein, carbs, fat, etc.).
-    Also includes daily totals and goals.
-
-    Args:
-        params: GetDiaryInput containing:
-            - date (str, optional): Date in YYYY-MM-DD format, defaults to today
-            - response_format (str): 'markdown' or 'json'
-
-    Returns:
-        str: Formatted diary data with meals, entries, nutrition, and goals
-    """
+    """Get a dated diary with meal entries, nutrition totals, and goals."""
     try:
         client = get_mfp_client()
         target_date = parse_date(params.date)
@@ -140,36 +126,11 @@ async def mfp_get_water(params: GetWaterInput) -> str:
     },
 )
 async def mfp_add_food_to_diary(params: AddFoodToDiaryInput) -> str:
-    """
-    Add an exact, user-facing amount of food to the MyFitnessPal diary.
+    """Add one food using an ID from search or meal-history resolution.
 
-    This tool adds a food entry to your diary. Obtain the modern food ID from
-    mfp_resolve_meal_food (preferred history-first path) or mfp_search_food
-    (fallback). ``amount`` is always expressed in ``unit``; it is NOT a serving
-    multiplier. The server converts it to the database food's serving count.
-    The write is refused when the database record has physically implausible
-    energy density.
-
-    Correct examples:
-      - 250 grams: amount=250, unit="g" (or "grammi")
-      - 1.5 servings: amount=1.5, unit="serving"
-      - 2 cups: amount=2, unit="cup"
-
-    Normally make one call for the complete amount of one food. A meal with
-    three different foods should use three calls, one per food. If splitting a
-    single food is genuinely required, the physical amounts across calls must
-    add up exactly to the request. Unknown units fail without writing anything.
-
-    Args:
-        params: AddFoodToDiaryInput containing:
-            - mfp_id (str): Modern food ID from resolution or fallback search
-            - meal (str): 'Breakfast', 'Lunch', 'Dinner', or 'Snacks'
-            - date (str, optional): Date in YYYY-MM-DD format, defaults to today
-            - amount (float): Physical amount expressed in unit (default: 1.0)
-            - unit (str): 'g', 'kg', 'oz', 'ml', serving name, or 'serving'
-
-    Returns:
-        str: Confirmation message with details of the added food entry
+    amount is the physical quantity in unit, not a database-serving multiplier:
+    250 grams is amount=250/unit="g"; 2 whole fruits is amount=2/unit="count".
+    Use unit="serving" only when the user explicitly says servings/portions.
     """
     try:
         client = get_mfp_client()
@@ -206,7 +167,7 @@ async def mfp_add_food_to_diary(params: AddFoodToDiaryInput) -> str:
         )
 
     except Exception as e:
-        return f"Error adding food to diary: {e!s}"
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
 @mcp.tool(
@@ -220,28 +181,9 @@ async def mfp_add_food_to_diary(params: AddFoodToDiaryInput) -> str:
     },
 )
 async def mfp_remove_food_from_diary(params: RemoveFoodFromDiaryInput) -> str:
-    """
-    Remove (delete) one or more food entries from your diary.
+    """Remove diary food by exact entry_id or fuzzy name_contains.
 
-    Two modes:
-
-    1. By entry_id (precise): delete exactly the entry whose
-       food_entry_id matches. Use this when you already know the ID.
-
-    2. By name_contains (fuzzy): list the day's entries, find ones whose
-       name contains the given substring (case-insensitive), optionally
-       restricted to a meal, and delete up to max_matches of them.
-
-    Args:
-        params: RemoveFoodFromDiaryInput with one of:
-            - entry_id: exact food_entry_id to delete
-            - name_contains: substring match against entry names
-            - meal: restrict matching to one meal
-            - max_matches: safety cap for fuzzy matches (default 1)
-            - date: date to operate on (default today)
-
-    Returns:
-        JSON describing each entry that was removed.
+    Fuzzy removal can be limited by meal and max_matches (default 1).
     """
     try:
         client = get_mfp_client()

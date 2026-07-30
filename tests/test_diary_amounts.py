@@ -1,8 +1,14 @@
 """Regression tests for converting user amounts to MFP serving counts."""
 
+import asyncio
+import json
+from datetime import date
+
 import pytest
 
 from mfp_mcp import server
+from mfp_mcp.services import diary as diary_service
+from mfp_mcp.tools import diary as diary_tools
 
 
 @pytest.fixture
@@ -61,3 +67,217 @@ def test_named_serving_uses_requested_physical_count():
     }
     _, count = server.resolve_food_amount(food, 2, "cup")
     assert count == 4
+
+
+def test_unreliable_one_gram_portion_metadata_fails_closed():
+    oats = {
+        "id": "oats",
+        "serving_sizes": [
+            {
+                "value": 1,
+                "unit": "portion",
+                "nutrition_multiplier": 1,
+                "gram_weight": 1,
+            }
+        ],
+    }
+
+    with pytest.raises(RuntimeError, match="not available"):
+        server.resolve_food_amount(oats, 50, "g")
+
+
+def test_count_selects_a_foods_discrete_unit():
+    kiwi = {
+        "id": "kiwi",
+        "serving_sizes": [
+            {
+                "value": 1,
+                "unit": "fruit",
+                "nutrition_multiplier": 1,
+                "gram_weight": 75,
+            }
+        ],
+    }
+
+    serving, count = server.resolve_food_amount(kiwi, 2, "count")
+
+    assert serving["unit"] == "fruit"
+    assert count == 2
+
+
+def test_count_converts_against_multi_item_database_serving():
+    kiwi = {
+        "id": "kiwi",
+        "serving_sizes": [
+            {"value": 2, "unit": "kiwi", "nutrition_multiplier": 1}
+        ],
+    }
+
+    serving, count = server.resolve_food_amount(kiwi, 2, "count")
+
+    assert serving == {"value": 2, "unit": "kiwi", "nutrition_multiplier": 1}
+    assert count == 1
+
+
+def test_count_skips_physical_measures_and_selects_named_item():
+    food = {
+        "id": "egg",
+        "serving_sizes": [
+            {"value": 1, "unit": "cup", "nutrition_multiplier": 2},
+            {"value": 1, "unit": "large", "nutrition_multiplier": 1},
+        ],
+    }
+
+    serving, count = server.resolve_food_amount(food, 2, "count")
+
+    assert serving["unit"] == "large"
+    assert count == 2
+
+
+@pytest.mark.parametrize("unit", ["fruit", "piece", "each", "unità", "pezzi"])
+def test_count_aliases_select_a_discrete_unit(unit):
+    food = {
+        "id": "item",
+        "serving_sizes": [
+            {"value": 1, "unit": "piece", "nutrition_multiplier": 1}
+        ],
+    }
+
+    _, count = server.resolve_food_amount(food, 2, unit)
+
+    assert count == 2
+
+
+def test_large_explicit_serving_count_is_rejected(ice_cream):
+    with pytest.raises(RuntimeError, match="Refusing 50 database servings"):
+        server.resolve_food_amount(ice_cream, 50, "serving")
+
+
+class _Response:
+    status_code = 201
+
+    def json(self):
+        return {"items": [{"id": "entry-id"}]}
+
+
+class _Session:
+    def __init__(self):
+        self.posts = []
+
+    def post(self, url, **kwargs):
+        self.posts.append((url, kwargs))
+        return _Response()
+
+
+class _Client:
+    access_token = "token"
+    user_id = "user"
+
+    def __init__(self):
+        self.session = _Session()
+
+
+def test_50_grams_of_oats_posts_half_of_a_100g_serving(monkeypatch):
+    oats = {
+        "id": "oats",
+        "version": "1",
+        "description": "Oat flakes",
+        "nutritional_contents": {"energy": {"value": 456}},
+        "serving_sizes": [
+            {"value": 1, "unit": "portion", "nutrition_multiplier": 1},
+            {"value": 100, "unit": "g", "nutrition_multiplier": 1},
+        ],
+    }
+    client = _Client()
+    monkeypatch.setattr(diary_service, "get_food_v2", lambda *args: oats)
+
+    result = diary_service.add_food_to_diary(
+        client, "oats", "Breakfast", date(2026, 7, 30), amount=50, unit="g"
+    )
+
+    payload = json.loads(client.session.posts[0][1]["data"])
+    entry = payload["items"][0]
+    assert entry["serving_size"]["unit"] == "g"
+    assert entry["servings"] == pytest.approx(0.5)
+    assert result["requested_amount"] == 50
+    assert result["requested_unit"] == "g"
+    assert result["estimated_calories"] == 228
+
+
+def test_two_kiwis_post_as_two_fruit_units(monkeypatch):
+    kiwi = {
+        "id": "kiwi",
+        "version": "1",
+        "description": "Kiwi fruit",
+        "nutritional_contents": {"energy": {"value": 46}},
+        "serving_sizes": [
+            {
+                "value": 1,
+                "unit": "fruit",
+                "nutrition_multiplier": 1,
+                "gram_weight": 75,
+            }
+        ],
+    }
+    client = _Client()
+    monkeypatch.setattr(diary_service, "get_food_v2", lambda *args: kiwi)
+
+    result = diary_service.add_food_to_diary(
+        client, "kiwi", "Snacks", date(2026, 7, 30), amount=2, unit="count"
+    )
+
+    payload = json.loads(client.session.posts[0][1]["data"])
+    entry = payload["items"][0]
+    assert entry["serving_size"]["unit"] == "fruit"
+    assert entry["servings"] == 2
+    assert result["estimated_calories"] == 92
+
+
+def test_entry_over_calorie_safety_limit_is_not_posted(monkeypatch):
+    oats = {
+        "id": "oats",
+        "description": "Oat flakes",
+        "nutritional_contents": {"energy": {"value": 456}},
+        "serving_sizes": [
+            {"value": 1, "unit": "portion", "nutrition_multiplier": 1}
+        ],
+    }
+    client = _Client()
+    monkeypatch.setattr(diary_service, "get_food_v2", lambda *args: oats)
+
+    with pytest.raises(RuntimeError, match="database servings"):
+        diary_service.add_food_to_diary(
+            client,
+            "oats",
+            "Breakfast",
+            date(2026, 7, 30),
+            amount=50,
+            unit="serving",
+        )
+
+    assert client.session.posts == []
+
+
+def test_add_tool_returns_structured_failure(monkeypatch):
+    monkeypatch.setattr(diary_tools, "get_mfp_client", lambda: object())
+
+    def fail(**kwargs):
+        raise RuntimeError("Unit 'g' is not available")
+
+    monkeypatch.setattr(diary_tools, "add_food_to_diary", fail)
+
+    result = asyncio.run(
+        diary_tools.mfp_add_food_to_diary(
+            server.AddFoodToDiaryInput(
+                mfp_id="food-id",
+                meal="Breakfast",
+                amount=50,
+                unit="g",
+            )
+        )
+    )
+
+    assert json.loads(result) == {
+        "success": False,
+        "error": "Unit 'g' is not available",
+    }

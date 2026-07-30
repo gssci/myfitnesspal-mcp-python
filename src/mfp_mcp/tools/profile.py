@@ -292,22 +292,7 @@ async def mfp_set_goals(params: SetGoalsInput) -> str:
     },
 )
 async def mfp_get_report(params: GetReportInput) -> str:
-    """
-    Get a nutrition report over a date range.
-
-    Returns daily values for the specified nutrient/metric over the date range.
-    Useful for analyzing trends and patterns in nutrition intake.
-
-    Args:
-        params: GetReportInput containing:
-            - report_name (str): Report type (e.g., 'Net Calories', 'Protein')
-            - start_date (str, optional): Start date, defaults to 7 days ago
-            - end_date (str, optional): End date, defaults to today
-            - response_format (str): 'markdown' or 'json'
-
-    Returns:
-        str: Daily values and summary statistics for the report period
-    """
+    """Get daily values and summary statistics for a nutrition date range."""
     try:
         client = get_mfp_client()
 

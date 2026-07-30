@@ -1,6 +1,6 @@
 # MyFitnessPal MCP Server
 
-A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that enables AI assistants like Claude to interact with your MyFitnessPal data, including food diary, exercises, body measurements, nutrition goals, and water intake.
+A focused [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server for MyFitnessPal diary, food search, and nutrition reports.
 
 ## Features
 
@@ -13,16 +13,6 @@ A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that e
 | `mfp_get_food_details` | Read | Get detailed nutrition info for a food item |
 | `mfp_add_food_to_diary` | Write | Add a food item to your diary for a specific meal and date |
 | `mfp_remove_food_from_diary` | Write | Remove a logged entry from your diary |
-| `mfp_create_custom_food` | Write | Create a private custom food with a full nutrition panel |
-| `mfp_list_own_foods` | Read | List your own custom foods (private ones do not appear in search) |
-| `mfp_delete_custom_food` | Write | Delete one of your custom foods |
-| `mfp_get_measurements` | Read | Get weight/body measurement history |
-| `mfp_set_measurement` | Write | Log a new weight or body measurement |
-| `mfp_get_exercises` | Read | Get logged exercises (cardio & strength) |
-| `mfp_get_goals` | Read | Get daily nutrition goals |
-| `mfp_set_goals` | Write | Update daily nutrition goals |
-| `mfp_get_water` | Read | Get water intake for a date |
-| `mfp_set_water` | Write | Log water intake for a date |
 | `mfp_get_report` | Read | Get nutrition reports over a date range |
 | `refresh_browser_cookies` | Utility | Extract and save session cookies from browser |
 
@@ -38,11 +28,16 @@ them to MFP's internal serving multiplier. For example, 250 g of a food whose da
 serving is 60 g is sent as one entry with `servings=4.16666667`. Callers should never
 split that amount into 100 + 100 + 50 or pass grams as a serving count.
 
-Food logging is history-first: `mfp_get_meal_foods` reads the same recent and
-frequent lists shown by MyFitnessPal for Breakfast (0), Lunch (1), Dinner (2),
-or Snacks (3). A matching `history_id` is converted to the modern API ID by
-`mfp_resolve_meal_food`; only missing or unresolvable foods need a global
-`mfp_search_food` call.
+Use `unit="count"` for whole items such as two kiwis or eggs. The server maps that
+request to an available discrete serving such as `fruit`, `piece`, `large`, or
+`2 kiwi`. `unit="serving"` is reserved for explicit serving/portion counts. Meal,
+amount, and unit are required, and writes above the serving/calorie safety limits
+are rejected before reaching MyFitnessPal.
+
+Food logging checks `mfp_get_meal_foods` before global search. A matching recent
+or frequent item is converted to a modern API ID by `mfp_resolve_meal_food`.
+The short-lived history cache avoids repeating those HTTP requests during
+resolution.
 
 Search and resolution results include `nutrition_plausibility`. The add tool
 also enforces this check and refuses records above a generous physical ceiling
@@ -666,13 +661,13 @@ Get food diary for a specific date.
 ### mfp_search_food
 Search the MyFitnessPal food database.
 - `query` (required): Search term
-- `limit` (optional): Max results (default 10, max 50)
+- `limit` (optional): Max results (default 15, max 50)
 - `response_format`: "markdown" or "json"
 
 ### mfp_get_meal_foods
 Get recent and frequent foods for one meal before doing a global search.
 - `meal` (required): 0=Breakfast, 1=Lunch, 2=Dinner, 3=Snacks
-- `limit_per_list` (optional): Maximum entries from each list (default 25, max 50)
+- Recent and frequent lists are returned without truncation.
 - `response_format`: "markdown" or "json"
 
 ### mfp_resolve_meal_food

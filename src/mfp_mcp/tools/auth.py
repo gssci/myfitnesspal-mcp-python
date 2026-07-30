@@ -13,24 +13,10 @@ from ..browser_cookies import (
 
 @mcp.tool()
 def refresh_browser_cookies(browser: str = "auto") -> str:
-    """
-    Extract and save session cookies from your web browser.
+    """Refresh an expired MFP session from a logged-in browser.
 
-    Use this tool when authentication fails and you need to refresh your
-    MyFitnessPal session. You must be logged into myfitnesspal.com in the
-    target browser.
-
-    Args:
-        browser: Source to extract cookies from. Options:
-                 - 'auto' (default): scan every installed Chromium-based
-                   browser on macOS (Arc, Chrome, Edge, Brave, Vivaldi,
-                   Opera, ...) and use the first one with a valid session.
-                 - 'arc', 'chrome', 'chromium', 'edge', 'brave', 'vivaldi',
-                   'opera': force a specific Chromium browser (macOS).
-                 - 'firefox': use browser_cookie3 (Firefox is not Chromium).
-
-    Returns:
-        Success message or error description.
+    Use browser="auto" unless a specific browser is requested. Supported names:
+    arc, chrome, chromium, edge, brave, vivaldi, opera, and firefox.
     """
     browser_key = browser.lower().strip()
 

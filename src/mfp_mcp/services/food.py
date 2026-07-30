@@ -4,6 +4,7 @@ import json
 import logging
 import re
 from datetime import date
+from time import monotonic
 from typing import Any
 from urllib.parse import quote
 
@@ -17,13 +18,20 @@ from ..config import (
     MFP_WEB_BASE,
 )
 from ..cookie_store import dict_to_cookiejar, save_cookies
-from ..units import is_gram_unit
+from ..units import (
+    is_discrete_serving,
+    is_gram_unit,
+    normalize_unit,
+    usable_gram_weight,
+)
 from .http import _api_error_detail, _get_csrf_token, _mfp_api_headers, _web_headers
 
 logger = logging.getLogger("mfp_mcp")
 
 _DIRECT_SERVING_RE = re.compile(r"^\s*([0-9]+(?:[.,][0-9]+)?)\s+(.+?)\s*$")
 _MAX_PLAUSIBLE_KCAL_PER_100 = 1000.0
+_MEAL_FOOD_CACHE_TTL_SECONDS = 60
+_MEAL_FOOD_CACHE: dict[tuple[int, int], tuple[float, dict[str, list[dict[str, Any]]]]] = {}
 
 _NUTRIENT_KEYS = {
     "fat": "fat",
@@ -155,6 +163,34 @@ def _format_serving_size(serving: dict[str, Any]) -> str:
     return " ".join(str(part) for part in (value, serving.get("unit")) if part is not None)
 
 
+def _food_name_key(value: Any) -> str:
+    return " ".join(re.sub(r"[^\w]+", " ", str(value).casefold()).split())
+
+
+def serving_capabilities(serving_sizes: list[dict[str, Any]]) -> dict[str, Any]:
+    """Expose compact, model-friendly unit choices without serving multipliers."""
+    count_units = list(
+        dict.fromkeys(
+            str(serving.get("unit"))
+            for serving in serving_sizes
+            if is_discrete_serving(serving)
+        )
+    )
+    return {
+        "serving_options": [
+            {"amount": serving.get("value"), "unit": serving.get("unit")}
+            for serving in serving_sizes[:5]
+        ],
+        "supports_grams": any(
+            normalize_unit(str(serving.get("unit", ""))) in {"g", "kg"}
+            or usable_gram_weight(serving) is not None
+            for serving in serving_sizes
+        ),
+        "supports_count": bool(count_units),
+        "count_units": count_units,
+    }
+
+
 def assess_food_plausibility(food: dict[str, Any]) -> dict[str, Any]:
     """Flag physically impossible energy density in user-contributed foods.
 
@@ -173,11 +209,6 @@ def assess_food_plausibility(food: dict[str, Any]) -> dict[str, Any]:
     for serving in food.get("serving_sizes") or []:
         unit = str(serving.get("unit") or "")
         normalized = unit.strip().casefold()
-        if not (
-            is_gram_unit(unit)
-            or normalized in {"ml", "milliliter", "milliliters", "millilitro", "millilitri"}
-        ):
-            continue
         try:
             value = float(serving.get("value"))
             multiplier = float(serving.get("nutrition_multiplier", 1))
@@ -185,8 +216,22 @@ def assess_food_plausibility(food: dict[str, Any]) -> dict[str, Any]:
             continue
         if value <= 0 or multiplier < 0:
             continue
+        if is_gram_unit(unit):
+            physical_amount = value
+            physical_unit = "g"
+        elif normalize_unit(unit) == "kg":
+            physical_amount = value * 1000
+            physical_unit = "g"
+        elif normalized in {"ml", "milliliter", "milliliters", "millilitro", "millilitri"}:
+            physical_amount = value
+            physical_unit = "ml"
+        elif (gram_weight := usable_gram_weight(serving)) is not None:
+            physical_amount = gram_weight
+            physical_unit = "g"
+        else:
+            continue
         densities.append(
-            ("g" if is_gram_unit(unit) else "ml", base_calories * multiplier / value * 100)
+            (physical_unit, base_calories * multiplier / physical_amount * 100)
         )
 
     if not densities:
@@ -258,13 +303,25 @@ def _parse_history_fragment(content: bytes, source: str) -> list[dict[str, Any]]
                     bool(match := _DIRECT_SERVING_RE.match(name)) and is_gram_unit(match.group(2))
                     for name in serving_names
                 ),
+                "supports_count": any(
+                    bool(match := _DIRECT_SERVING_RE.match(name))
+                    and is_discrete_serving(
+                        {"value": match.group(1).replace(",", "."), "unit": match.group(2)}
+                    )
+                    for name in serving_names
+                ),
             }
         )
     return results
 
 
-def get_meal_foods(client, meal: int, limit_per_list: int = 25) -> dict[str, list[dict[str, Any]]]:
+def get_meal_foods(client, meal: int) -> dict[str, list[dict[str, Any]]]:
     """Return the account's recent and frequent foods for one meal."""
+    cache_key = (id(client), meal)
+    cached = _MEAL_FOOD_CACHE.get(cache_key)
+    if cached and monotonic() - cached[0] <= _MEAL_FOOD_CACHE_TTL_SECONDS:
+        return cached[1]
+
     headers = {"Accept": "text/html", "X-Requested-With": "XMLHttpRequest"}
     output: dict[str, list[dict[str, Any]]] = {}
     for source, endpoint in (("recent", "load_recent"), ("frequent", "load_most_used")):
@@ -276,8 +333,16 @@ def get_meal_foods(client, meal: int, limit_per_list: int = 25) -> dict[str, lis
         )
         if response.status_code != 200:
             raise RuntimeError(f"Could not load {source} foods: HTTP {response.status_code}")
-        output[source] = _parse_history_fragment(response.content, source)[:limit_per_list]
+        output[source] = _parse_history_fragment(response.content, source)
+    _MEAL_FOOD_CACHE[cache_key] = (monotonic(), output)
     return output
+
+
+def invalidate_meal_food_cache(client) -> None:
+    """Discard cached recent/frequent lists after a diary mutation."""
+    client_id = id(client)
+    for key in [key for key in _MEAL_FOOD_CACHE if key[0] == client_id]:
+        del _MEAL_FOOD_CACHE[key]
 
 
 def _resolve_history_id_from_search(client, history_id: str, name: str, meal: int) -> str | None:
@@ -309,7 +374,7 @@ def _resolve_history_id_from_search(client, history_id: str, name: str, meal: in
 
 def resolve_meal_food(client, history_id: str, meal: int) -> dict[str, Any]:
     """Resolve and nutrition-check a food selected from meal history."""
-    lists = get_meal_foods(client, meal, limit_per_list=50)
+    lists = get_meal_foods(client, meal)
     candidate = next(
         (
             item
@@ -331,6 +396,7 @@ def resolve_meal_food(client, history_id: str, meal: int) -> dict[str, Any]:
         }
     food = get_food_v2(client, mfp_id)
     energy = ((food.get("nutritional_contents") or {}).get("energy") or {}).get("value")
+    serving_sizes = food.get("serving_sizes") or []
     return {
         "resolved": True,
         "mfp_id": str(mfp_id),
@@ -338,15 +404,13 @@ def resolve_meal_food(client, history_id: str, meal: int) -> dict[str, Any]:
         "brand": food.get("brand_name"),
         "verified": bool(food.get("verified")),
         "calories": energy,
-        "servings": [_format_serving_size(s) for s in (food.get("serving_sizes") or [])],
-        "supports_grams": any(
-            is_gram_unit(str(s.get("unit", ""))) for s in (food.get("serving_sizes") or [])
-        ),
+        "servings": [_format_serving_size(s) for s in serving_sizes],
+        **serving_capabilities(serving_sizes),
         "nutrition_plausibility": assess_food_plausibility(food),
     }
 
 
-def search_foods_web(client, query: str, limit: int = 10) -> list[dict[str, Any]]:
+def search_foods_web(client, query: str, limit: int = 15) -> list[dict[str, Any]]:
     """Search foods through the cookie-authenticated MyFitnessPal webpage."""
     url = f"{MFP_FOOD_SEARCH_PAGE}/{quote(query, safe='')}"
 
@@ -384,7 +448,7 @@ def search_foods_web(client, query: str, limit: int = 10) -> list[dict[str, Any]
 
     raw_items = _extract_food_search_items(response.content, query)
     results = []
-    for wrapped_item in raw_items[:limit]:
+    for rank, wrapped_item in enumerate(raw_items[:limit], start=1):
         item = wrapped_item.get("item", {}) if isinstance(wrapped_item, dict) else {}
         if not item.get("id"):
             continue
@@ -392,15 +456,16 @@ def search_foods_web(client, query: str, limit: int = 10) -> list[dict[str, Any]
         energy = (item.get("nutritional_contents") or {}).get("energy") or {}
         results.append(
             {
+                "rank": rank,
                 "name": item.get("description"),
+                "exact_name_match": _food_name_key(item.get("description"))
+                == _food_name_key(query),
                 "brand": item.get("brand_name"),
                 "serving": _format_serving_size(serving_sizes[0]) if serving_sizes else None,
                 "available_servings": [
                     _format_serving_size(serving) for serving in serving_sizes[:5]
                 ],
-                "supports_grams": any(
-                    is_gram_unit(str(serving.get("unit", ""))) for serving in serving_sizes
-                ),
+                **serving_capabilities(serving_sizes),
                 "calories": energy.get("value"),
                 "verified": bool(item.get("verified")),
                 "nutrition_plausibility": assess_food_plausibility(item),

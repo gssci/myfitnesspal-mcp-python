@@ -5,11 +5,14 @@ import logging
 from datetime import date
 
 from ..config import MFP_API_BASE, MFP_WEB_BASE, VALID_MEALS
-from ..units import normalize_unit
-from .food import assess_food_plausibility, get_food_v2
+from ..units import is_discrete_serving, normalize_unit, usable_gram_weight
+from .food import assess_food_plausibility, get_food_v2, invalidate_meal_food_cache
 from .http import _get_csrf_token, _mfp_api_headers, _web_headers
 
 logger = logging.getLogger("mfp_mcp")
+
+MAX_EXPLICIT_SERVINGS = 20
+MAX_ENTRY_CALORIES = 5000
 
 
 def resolve_food_amount(
@@ -29,19 +32,31 @@ def resolve_food_amount(
 
     wanted = normalize_unit(unit)
     if wanted == "serving":
+        if amount > MAX_EXPLICIT_SERVINGS:
+            raise RuntimeError(
+                f"Refusing {amount:g} database servings. For a physical amount, "
+                "use its real unit such as g, ml, or count."
+            )
         chosen = serving_sizes[0]
         servings = float(amount)
     else:
-        chosen = next(
-            (size for size in serving_sizes if normalize_unit(str(size.get("unit", ""))) == wanted),
-            None,
-        )
+        if wanted == "count":
+            chosen = next((size for size in serving_sizes if is_discrete_serving(size)), None)
+        else:
+            chosen = next(
+                (
+                    size
+                    for size in serving_sizes
+                    if normalize_unit(str(size.get("unit", ""))) == wanted
+                ),
+                None,
+            )
 
         # Some entries expose gram_weight even when the serving is named
         # "scoop", "piece", etc. That still permits exact gram conversion.
         if chosen is None and wanted in {"g", "kg"}:
             chosen = next(
-                (size for size in serving_sizes if float(size.get("gram_weight") or 0) > 0),
+                (size for size in serving_sizes if usable_gram_weight(size) is not None),
                 None,
             )
 
@@ -63,8 +78,8 @@ def resolve_food_amount(
                 units_per_serving = float(chosen["value"])
             elif chosen_unit == "kg":
                 units_per_serving = float(chosen["value"]) * 1000
-            elif chosen.get("gram_weight"):
-                units_per_serving = float(chosen["gram_weight"])
+            elif (gram_weight := usable_gram_weight(chosen)) is not None:
+                units_per_serving = gram_weight
             else:
                 raise RuntimeError(f"Cannot convert serving {chosen.get('unit')!r} to grams")
             servings = requested_grams / units_per_serving
@@ -87,6 +102,19 @@ def resolve_food_amount(
         "nutrition_multiplier": chosen["nutrition_multiplier"],
     }
     return diary_serving, servings
+
+
+def estimate_entry_calories(food: dict, serving: dict, servings: float) -> float | None:
+    """Estimate total calories using MFP's base energy and serving multiplier."""
+    energy = (food.get("nutritional_contents") or {}).get("energy") or {}
+    try:
+        base_calories = float(energy.get("value"))
+        multiplier = float(serving.get("nutrition_multiplier"))
+    except (TypeError, ValueError):
+        return None
+    if base_calories < 0 or multiplier < 0:
+        return None
+    return base_calories * multiplier * servings
 
 
 def add_food_to_diary(
@@ -122,6 +150,12 @@ def add_food_to_diary(
             + " ".join(plausibility["warnings"])
         )
     serving_size, servings = resolve_food_amount(food, amount, unit)
+    estimated_calories = estimate_entry_calories(food, serving_size, servings)
+    if estimated_calories is not None and estimated_calories > MAX_ENTRY_CALORIES:
+        raise RuntimeError(
+            f"Refusing an entry estimated at {estimated_calories:.0f} kcal. "
+            "This usually means grams or item counts were passed as database servings."
+        )
 
     meal_name = meal.strip().capitalize()
     if meal_name not in VALID_MEALS:
@@ -157,6 +191,8 @@ def add_food_to_diary(
             + (f" - {detail}" if detail else "")
         )
 
+    invalidate_meal_food_cache(client)
+
     logger.info(
         f"Added food {mfp_id} ({serving_size['value']} {serving_size['unit']} "
         f"x{servings:.6g}; requested {amount} {unit}) to {meal_name} for {target_date}"
@@ -180,6 +216,9 @@ def add_food_to_diary(
             "unit": serving_size["unit"],
         },
         "servings": round(servings, 8),
+        "estimated_calories": (
+            round(estimated_calories, 2) if estimated_calories is not None else None
+        ),
     }
 
 

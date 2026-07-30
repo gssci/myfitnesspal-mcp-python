@@ -13,12 +13,15 @@ from ..models import (
     SearchFoodInput,
 )
 from ..services.food import (
+    assess_food_plausibility,
     create_custom_food,
     delete_custom_food,
+    get_food_v2,
     get_meal_foods,
     list_own_foods,
     resolve_meal_food,
     search_foods_web,
+    serving_capabilities,
 )
 
 
@@ -35,16 +38,13 @@ from ..services.food import (
 async def mfp_get_meal_foods(params: GetMealFoodsInput) -> str:
     """Get recent and frequent foods for a specific meal.
 
-    Call this before a global food search when preparing to log food. Meal
-    numbers are 0=Breakfast, 1=Lunch, 2=Dinner, and 3=Snacks. Results contain
-    history IDs, names, prior quantities/servings, verification status, and
-    available servings. If the requested food matches one of these entries,
-    pass its history_id to mfp_resolve_meal_food. History IDs are not accepted
-    directly by mfp_add_food_to_diary.
+    Call once per requested meal before global search and reuse the result. Meal
+    numbers: 0=Breakfast, 1=Lunch, 2=Dinner, 3=Snacks. Resolve a semantic match's
+    history_id; it cannot be added directly.
     """
     try:
         client = get_mfp_client()
-        lists = get_meal_foods(client, params.meal, params.limit_per_list)
+        lists = get_meal_foods(client, params.meal)
         data = {
             "meal": params.meal,
             "recent_count": len(lists["recent"]),
@@ -67,12 +67,9 @@ async def mfp_get_meal_foods(params: GetMealFoodsInput) -> str:
     },
 )
 async def mfp_resolve_meal_food(params: ResolveMealFoodInput) -> str:
-    """Resolve a meal-history item to an add-ready ID and validate nutrition.
+    """Resolve a same-meal history_id to an add-ready, nutrition-checked mfp_id.
 
-    Use only with a history_id returned by mfp_get_meal_foods for the same
-    meal. A resolved result includes the modern mfp_id, servings, calories,
-    verification state, and nutrition_plausibility. Do not add an item whose
-    status is implausible. If resolved=false, fall back to mfp_search_food.
+    If unresolved or implausible, use mfp_search_food instead.
     """
     try:
         client = get_mfp_client()
@@ -93,23 +90,9 @@ async def mfp_resolve_meal_food(params: ResolveMealFoodInput) -> str:
     },
 )
 async def mfp_search_food(params: SearchFoodInput) -> str:
-    """
-    Search the MyFitnessPal food database for food items.
+    """Search foods with IDs, servings, calories, verification, and plausibility.
 
-    Returns matching foods with name, brand, primary and available serving sizes,
-    whether a gram serving is supported, calories, verification state,
-    nutrition plausibility, and MFP ID. When logging an amount provided in
-    grams, prefer a semantically equivalent result whose supports_grams field is
-    true. Never use a result whose nutrition_plausibility status is implausible.
-
-    Args:
-        params: SearchFoodInput containing:
-            - query (str): Search query (e.g., 'chicken breast')
-            - limit (int): Maximum results to return (default 10)
-            - response_format (str): 'markdown' or 'json'
-
-    Returns:
-        str: List of matching food items with basic nutrition info
+    Prefer supports_grams=true for gram requests; never use implausible results.
     """
     try:
         client = get_mfp_client()
@@ -135,55 +118,24 @@ async def mfp_search_food(params: SearchFoodInput) -> str:
     },
 )
 async def mfp_get_food_details(params: GetFoodDetailsInput) -> str:
-    """
-    Get detailed nutritional information for a specific food item by its MFP ID.
-
-    Returns complete nutrition breakdown including calories, macros (protein, carbs, fat),
-    fiber, sugar, sodium, cholesterol, vitamins, minerals, and available serving sizes.
-
-    Args:
-        params: GetFoodDetailsInput containing:
-            - mfp_id (str): MyFitnessPal food item ID from search results
-            - response_format (str): 'markdown' or 'json'
-
-    Returns:
-        str: Complete nutritional information for the food item
-    """
+    """Get full nutrition and serving details for an mfp_id."""
     try:
         client = get_mfp_client()
-        item = client.get_food_item_details(params.mfp_id)
+        item = get_food_v2(client, params.mfp_id)
+        serving_sizes = item.get("serving_sizes") or []
+        nutrition = item.get("nutritional_contents") or {}
+        energy = nutrition.get("energy") or {}
 
         data = {
             "mfp_id": params.mfp_id,
-            "description": getattr(item, "description", "N/A"),
-            "brand_name": getattr(item, "brand_name", None),
-            "verified": getattr(item, "verified", False),
-            "calories": getattr(item, "calories", None),
-            "nutrition": {
-                "protein": getattr(item, "protein", None),
-                "carbohydrates": getattr(item, "carbohydrates", None),
-                "fat": getattr(item, "fat", None),
-                "fiber": getattr(item, "fiber", None),
-                "sugar": getattr(item, "sugar", None),
-                "sodium": getattr(item, "sodium", None),
-                "cholesterol": getattr(item, "cholesterol", None),
-                "saturated_fat": getattr(item, "saturated_fat", None),
-                "polyunsaturated_fat": getattr(item, "polyunsaturated_fat", None),
-                "monounsaturated_fat": getattr(item, "monounsaturated_fat", None),
-                "trans_fat": getattr(item, "trans_fat", None),
-                "potassium": getattr(item, "potassium", None),
-                "vitamin_a": getattr(item, "vitamin_a", None),
-                "vitamin_c": getattr(item, "vitamin_c", None),
-                "calcium": getattr(item, "calcium", None),
-                "iron": getattr(item, "iron", None),
-            },
-            "servings": [],
+            "description": item.get("description", "N/A"),
+            "brand_name": item.get("brand_name"),
+            "verified": bool(item.get("verified")),
+            "calories": energy.get("value"),
+            "nutrition": nutrition,
+            **serving_capabilities(serving_sizes),
+            "nutrition_plausibility": assess_food_plausibility(item),
         }
-
-        # Get serving sizes if available
-        if hasattr(item, "servings"):
-            for serving in item.servings:
-                data["servings"].append(str(serving))
 
         return format_response(data, params.response_format, "Food Item Details")
 
