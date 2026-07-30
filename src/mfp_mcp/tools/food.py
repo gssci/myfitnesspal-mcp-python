@@ -215,7 +215,7 @@ async def mfp_list_own_foods(params: ListOwnFoodsInput) -> str:
             "count": len(foods),
             "foods": [
                 {
-                    "id": f.get("id"),
+                    "id": str(f["id"]) if f.get("id") is not None else None,
                     "description": f.get("description"),
                     "brand_name": f.get("brand_name"),
                     "calories": (f.get("nutritional_contents", {}).get("energy", {}) or {}).get(

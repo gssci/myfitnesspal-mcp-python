@@ -8,7 +8,7 @@ from .formatting import ResponseFormat
 class GetDiaryInput(BaseModel):
     """Input model for getting food diary."""
 
-    model_config = ConfigDict(str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True, coerce_numbers_to_str=True)
 
     date: str | None = Field(
         default=None,
@@ -24,7 +24,7 @@ class GetDiaryInput(BaseModel):
 class SearchFoodInput(BaseModel):
     """Input model for searching foods."""
 
-    model_config = ConfigDict(str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True, coerce_numbers_to_str=True)
 
     query: str = Field(
         ...,
@@ -47,7 +47,7 @@ class SearchFoodInput(BaseModel):
 class GetMealFoodsInput(BaseModel):
     """Input model for meal-specific recent and frequent foods."""
 
-    model_config = ConfigDict(str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True, coerce_numbers_to_str=True)
 
     meal: int = Field(
         ...,
@@ -64,7 +64,7 @@ class GetMealFoodsInput(BaseModel):
 class ResolveMealFoodInput(BaseModel):
     """Resolve a meal-history ID to an add-ready modern food ID."""
 
-    model_config = ConfigDict(str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True, coerce_numbers_to_str=True)
 
     history_id: str = Field(
         ...,
@@ -86,7 +86,7 @@ class ResolveMealFoodInput(BaseModel):
 class GetFoodDetailsInput(BaseModel):
     """Input model for getting food item details."""
 
-    model_config = ConfigDict(str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True, coerce_numbers_to_str=True)
 
     mfp_id: str = Field(
         ...,
@@ -102,7 +102,7 @@ class GetFoodDetailsInput(BaseModel):
 class GetMeasurementsInput(BaseModel):
     """Input model for getting measurements."""
 
-    model_config = ConfigDict(str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True, coerce_numbers_to_str=True)
 
     measurement: str = Field(
         default="Weight",
@@ -127,7 +127,7 @@ class GetMeasurementsInput(BaseModel):
 class SetMeasurementInput(BaseModel):
     """Input model for setting a measurement."""
 
-    model_config = ConfigDict(str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True, coerce_numbers_to_str=True)
 
     measurement: str = Field(
         default="Weight",
@@ -143,7 +143,7 @@ class SetMeasurementInput(BaseModel):
 class GetExercisesInput(BaseModel):
     """Input model for getting exercises."""
 
-    model_config = ConfigDict(str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True, coerce_numbers_to_str=True)
 
     date: str | None = Field(
         default=None,
@@ -159,7 +159,7 @@ class GetExercisesInput(BaseModel):
 class GetGoalsInput(BaseModel):
     """Input model for getting nutrition goals."""
 
-    model_config = ConfigDict(str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True, coerce_numbers_to_str=True)
 
     date: str | None = Field(
         default=None,
@@ -175,7 +175,7 @@ class GetGoalsInput(BaseModel):
 class SetGoalsInput(BaseModel):
     """Input model for setting nutrition goals."""
 
-    model_config = ConfigDict(str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True, coerce_numbers_to_str=True)
 
     calories: int | None = Field(
         default=None,
@@ -206,7 +206,7 @@ class SetGoalsInput(BaseModel):
 class GetWaterInput(BaseModel):
     """Input model for getting water intake."""
 
-    model_config = ConfigDict(str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True, coerce_numbers_to_str=True)
 
     date: str | None = Field(
         default=None,
@@ -218,7 +218,7 @@ class GetWaterInput(BaseModel):
 class GetReportInput(BaseModel):
     """Input model for getting nutrition reports."""
 
-    model_config = ConfigDict(str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True, coerce_numbers_to_str=True)
 
     report_name: str = Field(
         default="Net Calories",
@@ -243,7 +243,7 @@ class GetReportInput(BaseModel):
 class AddFoodToDiaryInput(BaseModel):
     """Add a measured amount of food to the diary."""
 
-    model_config = ConfigDict(str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True, coerce_numbers_to_str=True)
 
     mfp_id: str = Field(
         ...,
@@ -285,7 +285,7 @@ class AddFoodToDiaryInput(BaseModel):
 class CreateCustomFoodInput(BaseModel):
     """Input model for creating a private custom food."""
 
-    model_config = ConfigDict(str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True, coerce_numbers_to_str=True)
 
     description: str = Field(
         ..., description="Food name as it appears in MFP", min_length=1, max_length=200
@@ -350,7 +350,7 @@ class CreateCustomFoodInput(BaseModel):
 class DeleteCustomFoodInput(BaseModel):
     """Input model for deleting a custom food."""
 
-    model_config = ConfigDict(str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True, coerce_numbers_to_str=True)
 
     food_id: str = Field(
         ..., description="Food id (from mfp_create_custom_food or mfp_list_own_foods)", min_length=1
@@ -364,7 +364,7 @@ class DeleteCustomFoodInput(BaseModel):
 class ListOwnFoodsInput(BaseModel):
     """Input model for listing the user's own custom foods."""
 
-    model_config = ConfigDict(str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True, coerce_numbers_to_str=True)
 
     search: str = Field(default="", description="Optional substring filter on the food name")
     limit: int = Field(default=25, description="Max foods to return", gt=0, le=200)
@@ -377,7 +377,7 @@ class ListOwnFoodsInput(BaseModel):
 class RemoveFoodFromDiaryInput(BaseModel):
     """Input model for removing food entries from diary."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, coerce_numbers_to_str=True)
 
     date: str | None = Field(
         default=None,
@@ -412,7 +412,7 @@ class RemoveFoodFromDiaryInput(BaseModel):
 class SetWaterInput(BaseModel):
     """Input model for setting water intake."""
 
-    model_config = ConfigDict(str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True, coerce_numbers_to_str=True)
 
     cups: float = Field(
         ...,
