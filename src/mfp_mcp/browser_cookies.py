@@ -208,7 +208,7 @@ def _extract_chromium_cookies_macos(
             # — exact match + any subdomain. Avoids matching unrelated hosts
             # like `notmyfitnesspal.com` that the loose LIKE pattern would.
             rows = con.execute(
-                "SELECT name, value, encrypted_value, host_key FROM cookies "
+                "SELECT name, value, encrypted_value, host_key, last_update_utc FROM cookies "
                 "WHERE host_key = ? OR host_key LIKE ?",
                 (domain, f"%.{domain}"),
             ).fetchall()
@@ -220,12 +220,36 @@ def _extract_chromium_cookies_macos(
         except OSError:
             pass
     cookies: dict[str, str] = {}
-    for name, plain, enc, host_key in rows:
+    ranked: dict[str, tuple[int, int]] = {}
+    for name, plain, enc, host_key, last_update in rows:
         value = plain if plain else _decrypt_chromium_value_macos(enc, aes_key, host_key)
         if value is None or "�" in value:
             continue
+        # MyFitnessPal issues *different* values of the same cookie name to
+        # different hosts: `__Secure-next-auth.session-token` exists for both
+        # www.myfitnesspal.com and api.myfitnesspal.com. Collapsing rows by name
+        # alone let SQLite's row order pick which one we send to the website, so
+        # identical code intermittently authenticated or bounced to
+        # /account/logout. Rank by how well a row's host matches the host we
+        # actually talk to, then by recency.
+        rank = (_host_rank(host_key), int(last_update or 0))
+        if name in ranked and ranked[name] >= rank:
+            continue
+        ranked[name] = rank
         cookies[name] = value
     return cookies
+
+
+def _host_rank(host_key: str) -> int:
+    """Score a cookie row's host for requests aimed at www.myfitnesspal.com."""
+    host = (host_key or "").lstrip(".")
+    if host == "www.myfitnesspal.com":
+        return 3
+    if host == "myfitnesspal.com":
+        return 2
+    if host.startswith("api."):
+        return 0
+    return 1
 
 
 def _has_real_mfp_session(cookies: dict[str, str]) -> bool:
@@ -238,39 +262,89 @@ def _has_real_mfp_session(cookies: dict[str, str]) -> bool:
     return any("session-token" in name or name == "_mfp_session" for name in cookies)
 
 
+def _chromium_cookie_dbs(browser_name: str) -> list[Path]:
+    """Every profile's cookie DB for one browser, newest-written first.
+
+    Only the `Default` profile used to be searched, so a MyFitnessPal login
+    living in any other Chrome profile was invisible — and, worse, a stale
+    `Default` profile would be picked up instead of the profile actually in use.
+    """
+    relative_paths = _CHROMIUM_COOKIES_PATHS_MACOS.get(browser_name)
+    if not relative_paths:
+        return []
+    appsup = Path.home() / "Library" / "Application Support"
+    found: list[Path] = []
+    for relative in relative_paths:
+        exact = appsup / relative
+        if exact.exists():
+            found.append(exact)
+        # Swap the profile segment ("Default") for a glob so "Profile 1",
+        # "Profile 2", ... are covered too.
+        parts = relative.split("/")
+        if "Default" in parts:
+            pattern = "/".join("*" if part == "Default" else part for part in parts)
+            found.extend(path for path in appsup.glob(pattern) if path != exact)
+    unique = list(dict.fromkeys(found))
+    return sorted(unique, key=lambda path: path.stat().st_mtime, reverse=True)
+
+
 def _try_extract_from_chromium_browser(
     service: str,
 ) -> dict[str, str] | None:
     """Extract cookies from one specific Chromium browser by Safe Storage
     service name (e.g. 'Arc Safe Storage'). Returns None on any failure."""
+    for _, cookies in _chromium_profile_cookie_sets(service):
+        return cookies
+    return None
+
+
+def _chromium_profile_cookie_sets(service: str):
+    """Yield (profile_label, cookies) for each profile that holds MFP cookies."""
     browser_name = service.replace(" Safe Storage", "").strip()
-    relative_paths = _CHROMIUM_COOKIES_PATHS_MACOS.get(browser_name)
-    if not relative_paths:
-        logger.debug(f"No cookies DB path mapping for '{browser_name}'")
-        return None
-    appsup = Path.home() / "Library" / "Application Support"
-    db_path = next(
-        (appsup / p for p in relative_paths if (appsup / p).exists()),
-        None,
-    )
-    if not db_path:
+    db_paths = _chromium_cookie_dbs(browser_name)
+    if not db_paths:
         logger.debug(f"No cookies DB found for '{browser_name}'")
-        return None
+        return
     password = _safe_storage_keychain_password(service)
     if not password:
         logger.debug(f"Keychain lookup failed for '{service}'")
-        return None
+        return
     try:
         aes_key = _derive_chromium_aes_key_macos(password)
-        return _extract_chromium_cookies_macos(db_path, aes_key)
     except Exception as e:
-        logger.debug(f"Cookie extraction failed for '{browser_name}': {e}")
-        return None
+        logger.debug(f"Key derivation failed for '{browser_name}': {e}")
+        return
+    for db_path in db_paths:
+        try:
+            cookies = _extract_chromium_cookies_macos(db_path, aes_key)
+        except Exception as e:
+            logger.debug(f"Cookie extraction failed for '{db_path}': {e}")
+            continue
+        if not cookies:
+            continue
+        profile = db_path.parent.name if db_path.parent.name != "Network" else db_path.parts[-3]
+        label = browser_name if profile == "Default" else f"{browser_name} ({profile})"
+        yield label, cookies
 
 
-def try_chromium_browsers_for_session_cookies() -> tuple[str, dict[str, str]] | None:
-    """Discover installed Chromium browsers (macOS only) and return the first
-    one that has a valid MyFitnessPal session token.
+def try_chromium_browsers_for_session_cookies(
+    validate=None,
+) -> tuple[str, dict[str, str]] | None:
+    """Discover installed Chromium browsers (macOS only) and return one whose
+    MyFitnessPal session works.
+
+    Args:
+        validate: Optional predicate run against a candidate cookie set. When
+            given, scanning continues past any browser/profile it rejects, and
+            the first accepted set is returned. Without it — or when nothing is
+            accepted — the first set carrying session cookies is returned, which
+            keeps legacy-only callers working.
+
+    Every browser is checked before giving up, because the presence of a
+    session cookie says nothing about whether MyFitnessPal still honours it:
+    the previous "first browser with a session-token name wins" rule made a
+    dead Chrome session shadow a live one in another browser, and logged it as
+    "Found valid MyFitnessPal session".
 
     Returns a (browser_name, cookies) tuple, or None if no browser yielded
     a usable session.
@@ -281,15 +355,23 @@ def try_chromium_browsers_for_session_cookies() -> tuple[str, dict[str, str]] | 
     if not services:
         logger.debug("No Chromium Safe Storage entries found in keychain")
         return None
+    fallback: tuple[str, dict[str, str]] | None = None
     for service in services:
-        cookies = _try_extract_from_chromium_browser(service)
-        if not cookies:
-            continue
-        browser_name = service.replace(" Safe Storage", "").strip()
-        if _has_real_mfp_session(cookies):
-            logger.info(
-                f"Found valid MyFitnessPal session in {browser_name} ({len(cookies)} cookies)"
-            )
-            return browser_name, cookies
-        logger.debug(f"{browser_name} had {len(cookies)} cookies but no session token")
-    return None
+        for label, cookies in _chromium_profile_cookie_sets(service):
+            if not _has_real_mfp_session(cookies):
+                logger.debug(f"{label} had {len(cookies)} cookies but no session token")
+                continue
+            if validate is None:
+                logger.info(f"Found a MyFitnessPal session in {label} ({len(cookies)} cookies)")
+                return label, cookies
+            if validate(cookies):
+                logger.info(f"Found a live MyFitnessPal session in {label}")
+                return label, cookies
+            logger.debug(f"{label} held a MyFitnessPal session that the site rejected")
+            fallback = fallback or (label, cookies)
+    if fallback:
+        logger.warning(
+            f"No browser held a session MyFitnessPal still accepts; falling back to "
+            f"{fallback[0]}. Log in again at myfitnesspal.com to restore full access."
+        )
+    return fallback

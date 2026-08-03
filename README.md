@@ -55,6 +55,37 @@ but MyFitnessPal can change it without notice. They have already done so once: t
 originally posted to `/food/diary/{user}/add`, which now returns 404, leaving food logging
 broken. If logging starts failing, that is the most likely cause.
 
+## The two sessions, and what breaks when one dies
+
+One cookie jar carries **two independent MyFitnessPal sessions**, and they expire
+separately:
+
+| | Cookie | Authenticates |
+|---|---|---|
+| Legacy (Rails) | `_mfp_session` | `/food/diary`, `/food/search`, `/food/add_to_diary`, and the v2 API bearer token behind every diary write |
+| Web (NextAuth) | `__Secure-next-auth.session-token` | every Next.js page, and **all** `POST`s under `/food/` |
+
+The failure worth recognising is the half-dead one: legacy alive, NextAuth
+rejected. Diary reads and writes keep working, so every ordinary "is my session
+OK?" check passes, while MyFitnessPal answers each Next.js request with HTTP 200
+on `/account/logout` and each `/food/` POST with `/account/login`. The symptoms
+are searches that find nothing and recent/frequent lists that come back empty on
+an account full of history.
+
+Both affected tools therefore have a classic-page fallback that needs only the
+legacy cookie:
+
+- `mfp_search_food` reads `/food/search` (over GET — the site's own POST is
+  bounced) and enriches the hits from the v2 API, falling back to the Next.js
+  search page.
+- `mfp_get_meal_foods` falls back to the lists `/food/add_to_diary?meal=N`
+  renders server-side, and flags the result as degraded so an unavailable list
+  is not read as an empty one.
+
+`refresh_browser_cookies` reports which sessions are live and prefers a browser
+profile whose web session MyFitnessPal still accepts. To repair the web half,
+log out and back in at myfitnesspal.com, then run it again.
+
 ## Prerequisites
 
 - **Python 3.10–3.12** (check with `python3 --version`)
@@ -602,6 +633,29 @@ pip install -e .
    returns "no browser had a session", bring Claude Desktop to the
    foreground and retry so the prompt is visible. Once approved, the key
    is cached and the prompt won't repeat.
+
+### "Authentication error: MyFitnessPal rejected the stored session"
+
+**Problem**: The cookie set still satisfies the legacy diary endpoints but
+NextAuth no longer accepts it, so modern pages bounce to `/account/logout`
+and the classic `load_recent` / `load_most_used` endpoints answer with a
+login page — both with HTTP 200.
+
+`mfp_search_food` and `mfp_get_meal_foods` recover from this automatically:
+each re-reads the session from a Chromium browser once and retries, and only
+persists the replacement after it works. You will see this error only when
+that recovery also fails.
+
+**Solutions**: log into myfitnesspal.com in a Chromium-based browser, then
+call `refresh_browser_cookies` and retry. See the authentication section
+above if the browser session itself is the problem.
+
+**Note for agent authors**: this error means the session expired, *not* that
+the food is missing. Do not fall back to searching a different query or
+creating a custom food — refresh and retry the same call. Conversely,
+`mfp_get_meal_foods` returning `recent_count: 0` and `frequent_count: 0` is
+now always a real answer (it carries an explanatory `note`), so it is safe to
+go straight to `mfp_search_food`.
 
 ### "No module named 'mfp_mcp'"
 

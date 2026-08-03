@@ -45,12 +45,30 @@ async def mfp_get_meal_foods(params: GetMealFoodsInput) -> str:
     try:
         client = get_mfp_client()
         lists = get_meal_foods(client, params.meal)
-        data = {
+        # Read rather than pop: this dict is the cache entry itself.
+        degraded = bool(lists.get("degraded"))
+        data: dict = {
             "meal": params.meal,
             "recent_count": len(lists["recent"]),
             "frequent_count": len(lists["frequent"]),
-            **lists,
         }
+        if degraded:
+            # A zero count here means "MyFitnessPal would not serve this list",
+            # not "the account has no such history". Saying so keeps the caller
+            # from concluding the user has never eaten these foods.
+            data["note"] = (
+                "MyFitnessPal refused part of this meal's history, so a list shown as "
+                "empty may not really be empty. The foods listed are still usable."
+            )
+        elif not lists["recent"] and not lists["frequent"]:
+            # An empty history is now only ever reported when the session is
+            # valid, so it is a real answer: say so, rather than leaving the
+            # caller to guess whether the lookup silently failed.
+            data["note"] = (
+                "This meal has no recent or frequent foods yet. "
+                "Use mfp_search_food for every food in this meal."
+            )
+        data.update({key: lists[key] for key in ("recent", "frequent")})
         return format_response(data, params.response_format, "Recent and Frequent Meal Foods")
     except Exception as e:
         return f"Error getting meal foods: {e!s}"

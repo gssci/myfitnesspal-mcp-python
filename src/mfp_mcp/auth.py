@@ -194,6 +194,19 @@ def _verify_cookies_and_format(cookies: dict[str, str], source: str) -> str:
         )
     save_cookies(cookies)
     clear_cached_mfp_client()
+    # `get_date` only exercises the legacy Rails session. Reporting on that
+    # alone is what made a half-dead session look healthy: diary writes kept
+    # working while food search and meal history bounced to /account/logout.
+    from .services.http import web_session_is_live
+
+    if not web_session_is_live(client.session):
+        return (
+            f"Extracted {len(cookies)} cookies from {source}. Diary reads and writes work, "
+            "but MyFitnessPal rejected the web (NextAuth) half of the session, so food "
+            "search and recent/frequent meal foods run in a degraded fallback mode. "
+            "Log out and back in at myfitnesspal.com in that browser, then run "
+            "refresh_browser_cookies again to restore them."
+        )
     return (
         f"Successfully extracted and verified {len(cookies)} cookies "
         f"from {source}. Authentication is now working."

@@ -12,6 +12,11 @@ MFP_WEB_BASE = "https://www.myfitnesspal.com"
 MFP_API_BASE = "https://api.myfitnesspal.com"
 MFP_CLIENT_ID = "mfp-main-js"
 MFP_FOOD_SEARCH_PAGE = f"{MFP_WEB_BASE}/food/calorie-chart-nutrition-facts"
+# The classic (Rails-served) food pages. They authenticate off `_mfp_session`
+# alone, so they keep working when the NextAuth session that the Next.js pages
+# require has been rejected — see services.http.web_session_is_live.
+MFP_LEGACY_SEARCH_PAGE = f"{MFP_WEB_BASE}/food/search"
+MFP_ADD_TO_DIARY_PAGE = f"{MFP_WEB_BASE}/food/add_to_diary"
 MFP_BROWSER_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"

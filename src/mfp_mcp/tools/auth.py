@@ -9,6 +9,7 @@ from ..browser_cookies import (
     _try_extract_from_chromium_browser,
     try_chromium_browsers_for_session_cookies,
 )
+from ..services.http import _cookies_have_live_web_session
 
 
 @mcp.tool()
@@ -20,9 +21,14 @@ def refresh_browser_cookies(browser: str = "auto") -> str:
     """
     browser_key = browser.lower().strip()
 
-    # 'auto' — discover every Chromium browser via keychain Safe Storage
+    # 'auto' — discover every Chromium browser via keychain Safe Storage,
+    # preferring one whose web session MyFitnessPal still accepts. Picking the
+    # first browser that merely *has* session cookies is how a dead Chrome
+    # session kept shadowing a live one elsewhere.
     if browser_key == "auto":
-        result = try_chromium_browsers_for_session_cookies()
+        result = try_chromium_browsers_for_session_cookies(
+            validate=_cookies_have_live_web_session
+        )
         if not result:
             return (
                 "Auto-discovery did not find a Chromium browser with a "

@@ -75,19 +75,26 @@ from .services.food import (
     create_custom_food,
     delete_custom_food,
     get_food_v2,
+    get_foods_v2,
     get_meal_foods,
     invalidate_meal_food_cache,
     list_own_foods,
     resolve_meal_food,
+    search_foods_legacy,
+    search_foods_next,
     search_foods_web,
     select_serving_size,
     serving_capabilities,
 )
 from .services.http import (
+    MfpSessionExpiredError,
     _api_error_detail,
     _get_csrf_token,
     _mfp_api_headers,
     _web_headers,
+    is_logged_out_response,
+    refresh_session_from_browser,
+    web_session_is_live,
 )
 from .tools.auth import refresh_browser_cookies
 from .tools.diary import (
