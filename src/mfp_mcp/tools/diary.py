@@ -2,8 +2,9 @@
 
 import json
 
-from ..app import mcp
 from ..auth import get_mfp_client
+from ..config import normalize_meal_name
+from ..flat_schema import flat_tool
 from ..formatting import (
     format_meal_entry,
     format_nutrition_dict,
@@ -25,7 +26,7 @@ from ..services.diary import (
 )
 
 
-@mcp.tool(
+@flat_tool(
     name="mfp_get_diary",
     annotations={
         "title": "Get Food Diary",
@@ -75,7 +76,7 @@ async def mfp_get_diary(params: GetDiaryInput) -> str:
         return f"Error retrieving diary: {e!s}"
 
 
-@mcp.tool(
+@flat_tool(
     name="mfp_get_water",
     annotations={
         "title": "Get Water Intake",
@@ -115,7 +116,7 @@ async def mfp_get_water(params: GetWaterInput) -> str:
         return f"Error getting water intake: {e!s}"
 
 
-@mcp.tool(
+@flat_tool(
     name="mfp_add_food_to_diary",
     annotations={
         "title": "Add Food to Diary",
@@ -136,10 +137,8 @@ async def mfp_add_food_to_diary(params: AddFoodToDiaryInput) -> str:
         client = get_mfp_client()
         target_date = parse_date(params.date)
 
-        # Normalize meal name (capitalize first letter)
-        meal = params.meal.strip().capitalize()
-        if meal.lower() == "snack":
-            meal = "Snacks"
+        # Already normalized by the model; kept explicit for direct callers.
+        meal = normalize_meal_name(params.meal)
 
         # Add food to diary
         result = add_food_to_diary(
@@ -170,7 +169,7 @@ async def mfp_add_food_to_diary(params: AddFoodToDiaryInput) -> str:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(
+@flat_tool(
     name="mfp_remove_food_from_diary",
     annotations={
         "title": "Remove Food From Diary",
@@ -258,7 +257,7 @@ async def mfp_remove_food_from_diary(params: RemoveFoodFromDiaryInput) -> str:
         return f"Error removing food: {e}"
 
 
-@mcp.tool(
+@flat_tool(
     name="mfp_set_water",
     annotations={
         "title": "Log Water Intake",

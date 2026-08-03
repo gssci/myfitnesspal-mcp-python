@@ -1,8 +1,21 @@
 """Validated input models for MCP tools."""
 
-from pydantic import BaseModel, ConfigDict, Field
+from typing import Annotated
 
+from annotated_types import Ge, Le
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+
+from .config import normalize_meal_name, normalize_meal_number
 from .formatting import ResponseFormat
+
+# MyFitnessPal addresses meals by number on its history endpoints and by name
+# on its diary endpoints, so both spellings are in the tool surface. Each form
+# accepts the other and converts, because a caller holding one is otherwise a
+# validation error away from a dead end. The validators are appended last so
+# they run before the range check.
+MealNumber = Annotated[int, Ge(0), Le(3), BeforeValidator(normalize_meal_number)]
+MealName = Annotated[str, BeforeValidator(normalize_meal_name)]
+OptionalMealName = Annotated[str | None, BeforeValidator(normalize_meal_name)]
 
 
 class GetDiaryInput(BaseModel):
@@ -49,11 +62,12 @@ class GetMealFoodsInput(BaseModel):
 
     model_config = ConfigDict(str_strip_whitespace=True, coerce_numbers_to_str=True)
 
-    meal: int = Field(
+    meal: MealNumber = Field(
         ...,
-        description="Meal number: 0=Breakfast, 1=Lunch, 2=Dinner, 3=Snacks.",
-        ge=0,
-        le=3,
+        description=(
+            "Meal number: 0=Breakfast, 1=Lunch, 2=Dinner, 3=Snacks. "
+            "A meal name is also accepted."
+        ),
     )
     response_format: ResponseFormat = Field(
         default=ResponseFormat.MARKDOWN,
@@ -71,11 +85,12 @@ class ResolveMealFoodInput(BaseModel):
         description="History ID returned by mfp_get_meal_foods.",
         min_length=1,
     )
-    meal: int = Field(
+    meal: MealNumber = Field(
         ...,
-        description="Meal number used for the history lookup: 0=Breakfast, 1=Lunch, 2=Dinner, 3=Snacks.",
-        ge=0,
-        le=3,
+        description=(
+            "Meal number used for the history lookup: 0=Breakfast, 1=Lunch, "
+            "2=Dinner, 3=Snacks. A meal name is also accepted."
+        ),
     )
     response_format: ResponseFormat = Field(
         default=ResponseFormat.MARKDOWN,
@@ -253,9 +268,12 @@ class AddFoodToDiaryInput(BaseModel):
         ),
         min_length=1,
     )
-    meal: str = Field(
+    meal: MealName = Field(
         ...,
-        description="Meal name (e.g., 'Breakfast', 'Lunch', 'Dinner', 'Snacks')",
+        description=(
+            "Meal name: 'Breakfast', 'Lunch', 'Dinner', or 'Snacks'. "
+            "The meal number 0-3 is also accepted."
+        ),
     )
     date: str | None = Field(
         default=None,
@@ -397,9 +415,12 @@ class RemoveFoodFromDiaryInput(BaseModel):
             "(e.g. 'banana' or '0.5 cup rice'). Ignored if entry_id is set."
         ),
     )
-    meal: str | None = Field(
+    meal: OptionalMealName = Field(
         default=None,
-        description=("Restrict matching to a meal: Breakfast, Lunch, Dinner, Snacks."),
+        description=(
+            "Restrict matching to a meal: Breakfast, Lunch, Dinner, Snacks. "
+            "The meal number 0-3 is also accepted."
+        ),
     )
     max_matches: int = Field(
         default=1,

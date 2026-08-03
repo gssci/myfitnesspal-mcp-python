@@ -4,7 +4,7 @@ import json
 import logging
 from datetime import date
 
-from ..config import MFP_API_BASE, MFP_WEB_BASE, VALID_MEALS
+from ..config import MFP_API_BASE, MFP_WEB_BASE, VALID_MEALS, normalize_meal_name
 from ..units import is_discrete_serving, normalize_unit, usable_gram_weight
 from .food import assess_food_plausibility, get_food_v2, invalidate_meal_food_cache
 from .http import _get_csrf_token, _mfp_api_headers, _web_headers
@@ -157,9 +157,14 @@ def add_food_to_diary(
             "This usually means grams or item counts were passed as database servings."
         )
 
-    meal_name = meal.strip().capitalize()
+    # Accepts a meal number as well as a name: this endpoint wants a name, the
+    # history endpoints want a number, and callers mix them up constantly.
+    meal_name = normalize_meal_name(meal)
     if meal_name not in VALID_MEALS:
-        raise RuntimeError(f"Invalid meal {meal!r}. Expected one of: {', '.join(VALID_MEALS)}")
+        raise RuntimeError(
+            f"Invalid meal {meal!r}. Expected one of: {', '.join(VALID_MEALS)}, "
+            "or a meal number 0-3."
+        )
 
     entry = {
         "type": "food_entry",

@@ -4,8 +4,8 @@ import json
 from collections import OrderedDict
 from datetime import date, timedelta
 
-from ..app import mcp
 from ..auth import get_mfp_client
+from ..flat_schema import flat_tool
 from ..formatting import (
     format_exercise,
     format_response,
@@ -22,7 +22,7 @@ from ..models import (
 )
 
 
-@mcp.tool(
+@flat_tool(
     name="mfp_get_measurements",
     annotations={
         "title": "Get Body Measurements",
@@ -86,7 +86,7 @@ async def mfp_get_measurements(params: GetMeasurementsInput) -> str:
         return f"Error getting measurements: {e!s}"
 
 
-@mcp.tool(
+@flat_tool(
     name="mfp_set_measurement",
     annotations={
         "title": "Log Body Measurement",
@@ -129,7 +129,7 @@ async def mfp_set_measurement(params: SetMeasurementInput) -> str:
         return f"Error setting measurement: {e!s}"
 
 
-@mcp.tool(
+@flat_tool(
     name="mfp_get_exercises",
     annotations={
         "title": "Get Exercise Log",
@@ -179,7 +179,7 @@ async def mfp_get_exercises(params: GetExercisesInput) -> str:
         return f"Error getting exercises: {e!s}"
 
 
-@mcp.tool(
+@flat_tool(
     name="mfp_get_goals",
     annotations={
         "title": "Get Nutrition Goals",
@@ -216,7 +216,7 @@ async def mfp_get_goals(params: GetGoalsInput) -> str:
         return f"Error getting goals: {e!s}"
 
 
-@mcp.tool(
+@flat_tool(
     name="mfp_set_goals",
     annotations={
         "title": "Update Nutrition Goals",
@@ -281,7 +281,7 @@ async def mfp_set_goals(params: SetGoalsInput) -> str:
         return f"Error setting goals: {e!s}"
 
 
-@mcp.tool(
+@flat_tool(
     name="mfp_get_report",
     annotations={
         "title": "Get Nutrition Report",

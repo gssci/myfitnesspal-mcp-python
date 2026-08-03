@@ -1,7 +1,7 @@
 """MCP tools for food search, details, and custom foods."""
 
-from ..app import mcp
 from ..auth import get_mfp_client
+from ..flat_schema import flat_tool
 from ..formatting import format_response
 from ..models import (
     CreateCustomFoodInput,
@@ -25,7 +25,7 @@ from ..services.food import (
 )
 
 
-@mcp.tool(
+@flat_tool(
     name="mfp_get_meal_foods",
     annotations={
         "title": "Get Recent and Frequent Meal Foods",
@@ -56,7 +56,7 @@ async def mfp_get_meal_foods(params: GetMealFoodsInput) -> str:
         return f"Error getting meal foods: {e!s}"
 
 
-@mcp.tool(
+@flat_tool(
     name="mfp_resolve_meal_food",
     annotations={
         "title": "Resolve and Validate Meal Food",
@@ -79,7 +79,7 @@ async def mfp_resolve_meal_food(params: ResolveMealFoodInput) -> str:
         return f"Error resolving meal food: {e!s}"
 
 
-@mcp.tool(
+@flat_tool(
     name="mfp_search_food",
     annotations={
         "title": "Search Food Database",
@@ -107,7 +107,7 @@ async def mfp_search_food(params: SearchFoodInput) -> str:
         return f"Error searching foods: {e!s}"
 
 
-@mcp.tool(
+@flat_tool(
     name="mfp_get_food_details",
     annotations={
         "title": "Get Food Item Details",
@@ -143,7 +143,7 @@ async def mfp_get_food_details(params: GetFoodDetailsInput) -> str:
         return f"Error getting food details: {e!s}"
 
 
-@mcp.tool(
+@flat_tool(
     name="mfp_create_custom_food",
     annotations={
         "title": "Create Custom Food",
@@ -185,7 +185,7 @@ async def mfp_create_custom_food(params: CreateCustomFoodInput) -> str:
         return f"Error creating custom food: {e!s}"
 
 
-@mcp.tool(
+@flat_tool(
     name="mfp_list_own_foods",
     annotations={
         "title": "List Own Custom Foods",
@@ -232,7 +232,7 @@ async def mfp_list_own_foods(params: ListOwnFoodsInput) -> str:
         return f"Error listing own foods: {e!s}"
 
 
-@mcp.tool(
+@flat_tool(
     name="mfp_delete_custom_food",
     annotations={
         "title": "Delete Custom Food",

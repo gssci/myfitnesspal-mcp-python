@@ -687,18 +687,19 @@ Get detailed nutrition for a food item.
 ### mfp_add_food_to_diary
 Add a measured amount of food to your diary for a specific meal and date.
 - `mfp_id` (required): Modern food ID from `mfp_resolve_meal_food` or `mfp_search_food`
-- `meal` (optional): Meal name - "Breakfast", "Lunch", "Dinner", or "Snacks" (default: "Breakfast")
+- `meal` (required): Meal name - "Breakfast", "Lunch", "Dinner", or "Snacks". The meal
+  number 0-3 is also accepted.
 - `date` (optional): YYYY-MM-DD format (default: today)
-- `amount` (optional): Physical amount expressed in `unit` (default: 1.0). This is not
-  the database serving multiplier.
-- `unit` (optional): `g`, `kg`, `oz`, `ml`, an available serving name, or `serving`
-  (default: `serving`). Italian aliases such as `grammi` and `porzioni` are accepted.
+- `amount` (required): Physical amount expressed in `unit`. This is not the database
+  serving multiplier.
+- `unit` (required): `g`, `kg`, `oz`, `ml`, an available serving name, or `serving`.
+  Italian aliases such as `grammi` and `porzioni` are accepted.
 
 **Example workflow:**
 1. Use `mfp_get_meal_foods`; resolve a matching history item with
    `mfp_resolve_meal_food`. Use `mfp_search_food` only if needed.
 2. Add 250 g in one call:
-   `{"params":{"mfp_id":"27769042718141","meal":"Snacks","amount":250,"unit":"g"}}`
+   `{"mfp_id":"27769042718141","meal":"Snacks","amount":250,"unit":"g"}`
 
 The response reports the requested amount, selected database serving, calculated
 serving count, and entry ID. Unknown units fail closed without writing an entry.
