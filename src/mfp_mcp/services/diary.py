@@ -4,7 +4,13 @@ import json
 import logging
 from datetime import date
 
-from ..config import MFP_API_BASE, MFP_WEB_BASE, VALID_MEALS, normalize_meal_name
+from ..config import (
+    MFP_API_BASE,
+    MFP_WEB_BASE,
+    VALID_MEALS,
+    normalize_meal_name,
+    normalize_meal_number,
+)
 from ..units import is_discrete_serving, normalize_unit, usable_gram_weight
 from .food import assess_food_plausibility, get_food_v2, invalidate_meal_food_cache
 from .http import _get_csrf_token, _mfp_api_headers, _web_headers
@@ -142,20 +148,49 @@ def estimate_entry_calories(food: dict, serving: dict, servings: float) -> float
     return entry_nutrition(food, serving, servings).get("calories")
 
 
-def get_day_totals(client, target_date: date) -> dict[str, float]:
-    """Read the day's logged calories and macros, and nothing else.
-
-    Deliberately narrower than ``mfp_get_diary``: a logging confirmation needs
-    the running totals, not every entry of every meal.
-    """
-    day = client.get_date(target_date)
+def _macro_totals(nutrition: dict) -> dict[str, float]:
+    """Keep only the reported macros, in reading order, as plain floats."""
     totals: dict[str, float] = {}
-    for key, value in day.totals.items():
-        if key not in MACRO_KEYS:
+    for key in MACRO_KEYS:
+        if key not in nutrition:
             continue
+        value = nutrition[key]
         magnitude = float(value.magnitude) if hasattr(value, "magnitude") else float(value)
         totals[key] = round(magnitude, 1)
-    return {key: totals[key] for key in MACRO_KEYS if key in totals}
+    return totals
+
+
+def _find_meal(day, meal: str):
+    """Locate a meal on a scraped day, by name and then by diary position.
+
+    MyFitnessPal renders meal headings in the account's own language, so an
+    English name match cannot be relied on. Position is the fallback because
+    the diary always lists its meals in the 0-3 order the meal number encodes.
+    """
+    wanted = normalize_meal_name(meal)
+    meals = list(day.meals)
+    for candidate in meals:
+        if str(candidate.name).strip().casefold() == str(wanted).strip().casefold():
+            return candidate
+    index = normalize_meal_number(meal)
+    if isinstance(index, int) and 0 <= index < len(meals):
+        return meals[index]
+    return None
+
+
+def get_diary_totals(client, target_date: date, meal: str | None = None) -> dict:
+    """Read the day's calories and macros, and one meal's, in a single fetch.
+
+    Deliberately narrower than ``mfp_get_diary``: a logging confirmation needs
+    the running totals, not every entry of every meal. ``meal`` is None when
+    only the day is wanted, and the meal is reported as None when the diary
+    holds no such meal.
+    """
+    day = client.get_date(target_date)
+    return {
+        "meal": _macro_totals(found.totals) if (found := _find_meal(day, meal)) else None,
+        "day": _macro_totals(day.totals),
+    }
 
 
 def add_food_to_diary(

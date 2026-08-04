@@ -45,11 +45,14 @@ of 1,000 kcal per 100 g/ml, catching database mistakes such as 800 kcal per
 gram before they reach the diary.
 
 A successful add returns `nutrition` (that entry's calories and macros, scaled
-from the food record already fetched for the write) and `day_totals` (the whole
-day's, including the new entry). A client can therefore confirm what it logged
-without a follow-up `mfp_get_diary` call, which would return every entry of
-every meal. If the totals read fails the write is still reported as successful,
-with `day_totals` null and the reason in `day_totals_error`.
+from the food record already fetched for the write) plus `meal_totals` and
+`day_totals` — that meal's and the whole day's, both including the new entry and
+both read from a single diary fetch. A client can therefore confirm what it
+logged without a follow-up `mfp_get_diary` call, which would return every entry
+of every meal. The meal is located by name and then by diary position, since
+MyFitnessPal renders meal headings in the account's own language. If the totals
+read fails the write is still reported as successful, with both totals null and
+the reason in `day_totals_error`.
 
 **Custom-food writes** (`mfp_create_custom_food`, `mfp_list_own_foods`,
 `mfp_delete_custom_food`) use a different endpoint family: MFP's v2 API exposes no

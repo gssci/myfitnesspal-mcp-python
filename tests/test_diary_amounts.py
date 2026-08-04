@@ -334,36 +334,102 @@ def test_add_food_reports_the_entry_macros_it_logged(monkeypatch):
     }
 
 
-def test_get_day_totals_keeps_only_the_reported_macros():
-    class _Day:
-        def __init__(self):
-            self.totals = {
-                "calories": 1487.4,
-                "carbohydrates": 150.44,
-                "fat": 48.9,
-                "protein": 96.2,
-                "sodium": 2100,
-                "sugar": 61,
-            }
+class _Meal:
+    def __init__(self, name, totals):
+        self.name = name
+        self.totals = totals
 
-    class _DiaryClient:
-        def get_date(self, target_date):
-            assert target_date == date(2026, 8, 4)
-            return _Day()
 
-    totals = server.get_day_totals(_DiaryClient(), date(2026, 8, 4))
+class _Day:
+    def __init__(self, meals):
+        self.meals = meals
+        self.totals = {
+            "calories": 1487.4,
+            "carbohydrates": 150.44,
+            "fat": 48.9,
+            "protein": 96.2,
+            "sodium": 2100,
+            "sugar": 61,
+        }
+
+
+class _DiaryClient:
+    def __init__(self, meals):
+        self.day = _Day(meals)
+        self.fetches = 0
+
+    def get_date(self, target_date):
+        assert target_date == date(2026, 8, 4)
+        self.fetches += 1
+        return self.day
+
+
+def _english_day():
+    return _DiaryClient(
+        [
+            _Meal("breakfast", {"calories": 300.0, "protein": 12.0}),
+            _Meal("lunch", {"calories": 600.0, "protein": 40.0}),
+            _Meal("dinner", {"calories": 500.0, "protein": 39.0}),
+            _Meal("snacks", {"calories": 87.4, "protein": 5.2}),
+        ]
+    )
+
+
+def test_get_diary_totals_keeps_only_the_reported_macros():
+    totals = server.get_diary_totals(_english_day(), date(2026, 8, 4), "Snacks")
 
     # Ordered for reading, and trimmed to what a confirmation actually shows.
-    assert list(totals) == ["calories", "protein", "carbohydrates", "fat"]
-    assert totals == {
+    assert list(totals["day"]) == ["calories", "protein", "carbohydrates", "fat"]
+    assert totals["day"] == {
         "calories": 1487.4,
         "protein": 96.2,
         "carbohydrates": 150.4,
         "fat": 48.9,
     }
+    assert totals["meal"] == {"calories": 87.4, "protein": 5.2}
 
 
-def test_add_tool_returns_day_totals_so_no_second_diary_read_is_needed(monkeypatch):
+def test_get_diary_totals_reads_both_scopes_from_one_fetch():
+    client = _english_day()
+
+    server.get_diary_totals(client, date(2026, 8, 4), "Lunch")
+
+    assert client.fetches == 1
+
+
+def test_get_diary_totals_accepts_a_meal_number():
+    totals = server.get_diary_totals(_english_day(), date(2026, 8, 4), 1)
+
+    assert totals["meal"] == {"calories": 600.0, "protein": 40.0}
+
+
+def test_get_diary_totals_falls_back_to_meal_position_when_names_differ():
+    # MyFitnessPal renders meal headings in the account's own language, so an
+    # Italian diary must still resolve "Snacks" to the fourth meal.
+    client = _DiaryClient(
+        [
+            _Meal("colazione", {"calories": 300.0}),
+            _Meal("pranzo", {"calories": 600.0}),
+            _Meal("cena", {"calories": 500.0}),
+            _Meal("spuntini", {"calories": 87.4}),
+        ]
+    )
+
+    totals = server.get_diary_totals(client, date(2026, 8, 4), "Snacks")
+
+    assert totals["meal"] == {"calories": 87.4}
+
+
+def test_get_diary_totals_reports_no_meal_when_the_diary_has_none():
+    client = _DiaryClient([])
+
+    totals = server.get_diary_totals(client, date(2026, 8, 4), "Snacks")
+
+    assert totals["meal"] is None
+    assert totals["day"]["calories"] == 1487.4
+
+
+def test_add_tool_returns_both_totals_so_no_second_diary_read_is_needed(monkeypatch):
     monkeypatch.setattr(diary_tools, "get_mfp_client", lambda: object())
     monkeypatch.setattr(
         diary_tools,
@@ -376,9 +442,13 @@ def test_add_tool_returns_day_totals_so_no_second_diary_read_is_needed(monkeypat
             "nutrition": {"calories": 228.0},
         },
     )
-    monkeypatch.setattr(
-        diary_tools, "get_day_totals", lambda client, target_date: {"calories": 1487.4}
-    )
+    asked_for = {}
+
+    def fake_totals(client, target_date, meal):
+        asked_for["meal"] = meal
+        return {"meal": {"calories": 528.0}, "day": {"calories": 1487.4}}
+
+    monkeypatch.setattr(diary_tools, "get_diary_totals", fake_totals)
 
     payload = json.loads(
         asyncio.run(
@@ -392,7 +462,9 @@ def test_add_tool_returns_day_totals_so_no_second_diary_read_is_needed(monkeypat
 
     assert payload["success"] is True
     assert payload["nutrition"] == {"calories": 228.0}
+    assert payload["meal_totals"] == {"calories": 528.0}
     assert payload["day_totals"] == {"calories": 1487.4}
+    assert asked_for["meal"] == "Breakfast"
 
 
 def test_add_tool_still_reports_success_when_the_totals_read_fails(monkeypatch):
@@ -407,10 +479,10 @@ def test_add_tool_still_reports_success_when_the_totals_read_fails(monkeypatch):
         },
     )
 
-    def boom(client, target_date):
+    def boom(client, target_date, meal):
         raise RuntimeError("diary page unavailable")
 
-    monkeypatch.setattr(diary_tools, "get_day_totals", boom)
+    monkeypatch.setattr(diary_tools, "get_diary_totals", boom)
 
     payload = json.loads(
         asyncio.run(
@@ -425,5 +497,6 @@ def test_add_tool_still_reports_success_when_the_totals_read_fails(monkeypatch):
     # The food is already logged, so a failed totals read must not report a
     # failed write.
     assert payload["success"] is True
+    assert payload["meal_totals"] is None
     assert payload["day_totals"] is None
     assert payload["day_totals_error"] == "diary page unavailable"

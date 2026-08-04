@@ -20,7 +20,7 @@ from ..models import (
 )
 from ..services.diary import (
     add_food_to_diary,
-    get_day_totals,
+    get_diary_totals,
     list_diary_entries,
     remove_food_entry,
     set_water_intake,
@@ -134,9 +134,9 @@ async def mfp_add_food_to_diary(params: AddFoodToDiaryInput) -> str:
     250 grams is amount=250/unit="g"; 2 whole fruits is amount=2/unit="count".
     Use unit="serving" only when the user explicitly says servings/portions.
 
-    Returns "nutrition" (this entry's calories and macros) and "day_totals"
-    (the whole day's, including this entry), so confirming an add never needs
-    a follow-up mfp_get_diary call.
+    Returns "nutrition" (this entry's calories and macros), "meal_totals" and
+    "day_totals" (that meal's and the whole day's, both including this entry),
+    so confirming an add never needs a follow-up mfp_get_diary call.
     """
     try:
         client = get_mfp_client()
@@ -170,8 +170,11 @@ async def mfp_add_food_to_diary(params: AddFoodToDiaryInput) -> str:
         # The food is already logged at this point, so a totals read that fails
         # must not turn a successful write into a reported failure.
         try:
-            payload["day_totals"] = get_day_totals(client, target_date)
+            totals = get_diary_totals(client, target_date, meal)
+            payload["meal_totals"] = totals["meal"]
+            payload["day_totals"] = totals["day"]
         except Exception as e:
+            payload["meal_totals"] = None
             payload["day_totals"] = None
             payload["day_totals_error"] = str(e)
 
