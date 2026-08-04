@@ -34,6 +34,15 @@ request to an available discrete serving such as `fruit`, `piece`, `large`, or
 amount, and unit are required, and writes above the serving/calorie safety limits
 are rejected before reaching MyFitnessPal.
 
+Almost every MFP food also lists generic `1 g` / `1 kg` / `1 mg` / `1 lb` servings,
+so `supports_grams` is true nearly always and says nothing about what was meant.
+Two guards follow from that. Those generic weights are excluded from `count_units`,
+so `unit="count"` can only ever resolve to a genuinely countable serving. And a
+weight too small to be a real portion of a food that is *also* sold by the item is
+refused outright — `amount=2, unit="g"` on a kiwi is two grams, about 1 kcal, not
+two kiwis — with an error naming `unit="count"` as the fix. A tiny weight of a food
+with no item serving, such as 2 g of salt, is still logged normally.
+
 Food logging checks `mfp_get_meal_foods` before global search. A matching recent
 or frequent item is converted to a modern API ID by `mfp_resolve_meal_food`.
 The short-lived history cache avoids repeating those HTTP requests during

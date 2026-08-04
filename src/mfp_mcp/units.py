@@ -53,13 +53,35 @@ _UNIT_ALIASES = {
     "whole": "count",
 }
 
+# Every measure MyFitnessPal can name, so that whatever is left over is
+# genuinely countable. A gap here is not cosmetic: an unlisted weight unit is
+# read as a discrete item, which both mislabels it in count_units and lets
+# unit="count" resolve to it, silently logging milligrams instead of fruit.
 _PHYSICAL_UNIT_PREFIXES = {
     "g",
+    "mg",
     "kg",
-    "ml",
-    "l",
+    "lb",
+    "lbs",
+    "pound",
+    "pounds",
     "oz",
+    "ml",
+    "cl",
+    "dl",
+    "l",
+    "liter",
+    "liters",
+    "litre",
+    "litres",
     "fl oz",
+    "floz",
+    "pint",
+    "pints",
+    "quart",
+    "quarts",
+    "gallon",
+    "gallons",
     "cup",
     "cups",
     "tsp",

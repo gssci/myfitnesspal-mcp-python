@@ -19,6 +19,9 @@ logger = logging.getLogger("mfp_mcp")
 
 MAX_EXPLICIT_SERVINGS = 20
 MAX_ENTRY_CALORIES = 5000
+# Below this an entry is nutritionally nothing, which on a food that is also
+# sold by the item means a count was almost certainly sent as a weight.
+MIN_COUNTABLE_ENTRY_CALORIES = 5
 
 # The nutrients a logging confirmation reports, in the order they read best.
 # "calories" is spelled "energy" in a food's v2 record and "calories" in the
@@ -193,6 +196,41 @@ def get_diary_totals(client, target_date: date, meal: str | None = None) -> dict
     }
 
 
+def count_sent_as_weight(
+    food: dict,
+    amount: float,
+    unit: str,
+    estimated_calories: float | None,
+) -> str | None:
+    """Detect a whole-item count that was sent as a weight, and say how to fix it.
+
+    "2 kiwis" logged as amount=2/unit="g" is two grams of kiwi — about 1 kcal —
+    and MyFitnessPal takes it without complaint, because nearly every food
+    carries a generic "1 g" serving that makes grams look universally valid.
+    The tell is a weight too small to be a real portion of a food that is also
+    sold by the item; 2 g of salt or of a spice has no item serving and is left
+    alone. Returns the caller-facing reason, or None when the entry is fine.
+    """
+    if normalize_unit(unit) not in {"g", "kg", "mg", "ml"}:
+        return None
+    if estimated_calories is None or estimated_calories >= MIN_COUNTABLE_ENTRY_CALORIES:
+        return None
+    count_units = [
+        str(serving.get("unit"))
+        for serving in food.get("serving_sizes") or []
+        if is_discrete_serving(serving)
+    ]
+    if not count_units:
+        return None
+    return (
+        f"Refusing {amount:g} {unit}: that is only about {estimated_calories:.0f} kcal "
+        f"of {food.get('description', 'this food')}, which is not a real portion. "
+        f"This food is also sold by the item ({', '.join(count_units[:3])}). If the "
+        f'user asked for {amount:g} whole items, send amount={amount:g} with unit="count" '
+        "instead. Do not switch to a different food, and do not use unit=\"serving\"."
+    )
+
+
 def add_food_to_diary(
     client,
     mfp_id: str,
@@ -233,6 +271,8 @@ def add_food_to_diary(
             f"Refusing an entry estimated at {estimated_calories:.0f} kcal. "
             "This usually means grams or item counts were passed as database servings."
         )
+    if mistake := count_sent_as_weight(food, amount, unit, estimated_calories):
+        raise RuntimeError(mistake)
 
     # Accepts a meal number as well as a name: this endpoint wants a name, the
     # history endpoints want a number, and callers mix them up constantly.

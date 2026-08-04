@@ -283,6 +283,91 @@ def test_add_tool_returns_structured_failure(monkeypatch):
     }
 
 
+@pytest.fixture
+def kiwi():
+    """A real MFP record: a countable serving plus generic weight servings."""
+    return {
+        "id": "kiwi",
+        "version": "1",
+        "description": "Kiwi",
+        "nutritional_contents": {"energy": {"value": 51}},
+        "serving_sizes": [
+            {"value": 1, "unit": "fruit", "nutrition_multiplier": 1, "gram_weight": 75},
+            {"value": 1, "unit": "g", "nutrition_multiplier": 0.0133},
+            {"value": 1, "unit": "kg", "nutrition_multiplier": 13.3},
+            {"value": 1, "unit": "mg", "nutrition_multiplier": 0.0000133},
+            {"value": 1, "unit": "lb", "nutrition_multiplier": 6.04},
+        ],
+    }
+
+
+def test_generic_weight_servings_are_not_countable_units(kiwi):
+    # "1 mg" and "1 lb" read as discrete items would both mislabel the food and
+    # let unit="count" resolve to milligrams.
+    assert server.serving_capabilities(kiwi["serving_sizes"])["count_units"] == ["fruit"]
+
+
+def test_count_resolves_to_the_item_serving_not_a_weight(kiwi):
+    serving, servings = server.resolve_food_amount(kiwi, 2, "count")
+
+    assert serving["unit"] == "fruit"
+    assert servings == 2
+
+
+def test_two_kiwis_sent_as_grams_is_refused_with_the_fix(monkeypatch, kiwi):
+    client = _Client()
+    monkeypatch.setattr(diary_service, "get_food_v2", lambda *args: kiwi)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        diary_service.add_food_to_diary(
+            client, "kiwi", "Snacks", date(2026, 8, 4), amount=2, unit="g"
+        )
+
+    message = str(excinfo.value)
+    assert "not a real portion" in message
+    assert 'unit="count"' in message
+    assert "fruit" in message
+    # Nothing may reach MyFitnessPal: silently logging 1 kcal is the bug.
+    assert client.session.posts == []
+
+
+def test_a_real_gram_amount_of_a_countable_food_still_logs(monkeypatch, kiwi):
+    client = _Client()
+    monkeypatch.setattr(diary_service, "get_food_v2", lambda *args: kiwi)
+
+    result = diary_service.add_food_to_diary(
+        client, "kiwi", "Snacks", date(2026, 8, 4), amount=150, unit="g"
+    )
+
+    assert result["requested_amount"] == 150
+    assert len(client.session.posts) == 1
+
+
+def test_a_tiny_weight_of_an_uncountable_food_still_logs(monkeypatch):
+    # 2 g of salt is a legitimate entry: no item serving means no count to
+    # confuse it with, so the guard must not fire.
+    salt = {
+        "id": "salt",
+        "version": "1",
+        "description": "Salt",
+        "nutritional_contents": {"energy": {"value": 0}},
+        "serving_sizes": [{"value": 1, "unit": "g", "nutrition_multiplier": 1}],
+    }
+    client = _Client()
+    monkeypatch.setattr(diary_service, "get_food_v2", lambda *args: salt)
+
+    diary_service.add_food_to_diary(
+        client, "salt", "Dinner", date(2026, 8, 4), amount=2, unit="g"
+    )
+
+    assert len(client.session.posts) == 1
+
+
+def test_count_sent_as_weight_ignores_non_weight_units(kiwi):
+    assert diary_service.count_sent_as_weight(kiwi, 2, "count", 1.0) is None
+    assert diary_service.count_sent_as_weight(kiwi, 2, "serving", 1.0) is None
+
+
 def test_entry_nutrition_scales_macros_and_skips_missing_ones():
     food = {
         "nutritional_contents": {
