@@ -14,6 +14,11 @@ logger = logging.getLogger("mfp_mcp")
 MAX_EXPLICIT_SERVINGS = 20
 MAX_ENTRY_CALORIES = 5000
 
+# The nutrients a logging confirmation reports, in the order they read best.
+# "calories" is spelled "energy" in a food's v2 record and "calories" in the
+# diary totals, so the lookup is special-cased in each direction.
+MACRO_KEYS = ("calories", "protein", "carbohydrates", "fat")
+
 
 def resolve_food_amount(
     food: dict,
@@ -104,17 +109,53 @@ def resolve_food_amount(
     return diary_serving, servings
 
 
+def entry_nutrition(food: dict, serving: dict, servings: float) -> dict[str, float]:
+    """Scale a food's stated macros to the amount actually being logged.
+
+    The v2 record was already fetched to perform the write, so this costs no
+    extra request. Nutrients the record does not carry are left out rather
+    than reported as zero.
+    """
+    nutrition = food.get("nutritional_contents") or {}
+    try:
+        multiplier = float(serving.get("nutrition_multiplier")) * float(servings)
+    except (TypeError, ValueError):
+        return {}
+    if multiplier < 0:
+        return {}
+
+    scaled: dict[str, float] = {}
+    for key in MACRO_KEYS:
+        raw = nutrition.get("energy") if key == "calories" else nutrition.get(key)
+        try:
+            value = float(raw.get("value") if isinstance(raw, dict) else raw)
+        except (TypeError, ValueError):
+            continue
+        if value < 0:
+            continue
+        scaled[key] = round(value * multiplier, 1)
+    return scaled
+
+
 def estimate_entry_calories(food: dict, serving: dict, servings: float) -> float | None:
     """Estimate total calories using MFP's base energy and serving multiplier."""
-    energy = (food.get("nutritional_contents") or {}).get("energy") or {}
-    try:
-        base_calories = float(energy.get("value"))
-        multiplier = float(serving.get("nutrition_multiplier"))
-    except (TypeError, ValueError):
-        return None
-    if base_calories < 0 or multiplier < 0:
-        return None
-    return base_calories * multiplier * servings
+    return entry_nutrition(food, serving, servings).get("calories")
+
+
+def get_day_totals(client, target_date: date) -> dict[str, float]:
+    """Read the day's logged calories and macros, and nothing else.
+
+    Deliberately narrower than ``mfp_get_diary``: a logging confirmation needs
+    the running totals, not every entry of every meal.
+    """
+    day = client.get_date(target_date)
+    totals: dict[str, float] = {}
+    for key, value in day.totals.items():
+        if key not in MACRO_KEYS:
+            continue
+        magnitude = float(value.magnitude) if hasattr(value, "magnitude") else float(value)
+        totals[key] = round(magnitude, 1)
+    return {key: totals[key] for key in MACRO_KEYS if key in totals}
 
 
 def add_food_to_diary(
@@ -150,7 +191,8 @@ def add_food_to_diary(
             + " ".join(plausibility["warnings"])
         )
     serving_size, servings = resolve_food_amount(food, amount, unit)
-    estimated_calories = estimate_entry_calories(food, serving_size, servings)
+    nutrition = entry_nutrition(food, serving_size, servings)
+    estimated_calories = nutrition.get("calories")
     if estimated_calories is not None and estimated_calories > MAX_ENTRY_CALORIES:
         raise RuntimeError(
             f"Refusing an entry estimated at {estimated_calories:.0f} kcal. "
@@ -221,9 +263,10 @@ def add_food_to_diary(
             "unit": serving_size["unit"],
         },
         "servings": round(servings, 8),
-        "estimated_calories": (
-            round(estimated_calories, 2) if estimated_calories is not None else None
-        ),
+        "estimated_calories": estimated_calories,
+        # This entry's own contribution, so a caller can report what it just
+        # logged without reading the food record back.
+        "nutrition": nutrition,
     }
 
 

@@ -61,6 +61,8 @@ from .models import (
 )
 from .services.diary import (
     add_food_to_diary,
+    entry_nutrition,
+    get_day_totals,
     list_diary_entries,
     remove_food_entry,
     resolve_food_amount,

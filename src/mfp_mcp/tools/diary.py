@@ -20,6 +20,7 @@ from ..models import (
 )
 from ..services.diary import (
     add_food_to_diary,
+    get_day_totals,
     list_diary_entries,
     remove_food_entry,
     set_water_intake,
@@ -132,6 +133,10 @@ async def mfp_add_food_to_diary(params: AddFoodToDiaryInput) -> str:
     amount is the physical quantity in unit, not a database-serving multiplier:
     250 grams is amount=250/unit="g"; 2 whole fruits is amount=2/unit="count".
     Use unit="serving" only when the user explicitly says servings/portions.
+
+    Returns "nutrition" (this entry's calories and macros) and "day_totals"
+    (the whole day's, including this entry), so confirming an add never needs
+    a follow-up mfp_get_diary call.
     """
     try:
         client = get_mfp_client()
@@ -150,20 +155,27 @@ async def mfp_add_food_to_diary(params: AddFoodToDiaryInput) -> str:
             unit=params.unit,
         )
 
-        return json.dumps(
-            {
-                "success": True,
-                "message": (
-                    f"Successfully added {result['requested_amount']:g} "
-                    f"{result['requested_unit']} of {result['food_name']} to {meal}"
-                ),
-                "date": str(target_date),
-                "meal": meal,
-                "food_id": params.mfp_id,
-                **result,
-            },
-            indent=2,
-        )
+        payload = {
+            "success": True,
+            "message": (
+                f"Successfully added {result['requested_amount']:g} "
+                f"{result['requested_unit']} of {result['food_name']} to {meal}"
+            ),
+            "date": str(target_date),
+            "meal": meal,
+            "food_id": params.mfp_id,
+            **result,
+        }
+
+        # The food is already logged at this point, so a totals read that fails
+        # must not turn a successful write into a reported failure.
+        try:
+            payload["day_totals"] = get_day_totals(client, target_date)
+        except Exception as e:
+            payload["day_totals"] = None
+            payload["day_totals_error"] = str(e)
+
+        return json.dumps(payload, indent=2)
 
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)}, indent=2)

@@ -281,3 +281,149 @@ def test_add_tool_returns_structured_failure(monkeypatch):
         "success": False,
         "error": "Unit 'g' is not available",
     }
+
+
+def test_entry_nutrition_scales_macros_and_skips_missing_ones():
+    food = {
+        "nutritional_contents": {
+            "energy": {"value": 456, "unit": "calories"},
+            "protein": 16.9,
+            "carbohydrates": 66.3,
+            # No "fat" key: reporting 0 g of fat would be a made-up number.
+        }
+    }
+    serving = {"nutrition_multiplier": 1}
+
+    assert diary_service.entry_nutrition(food, serving, 0.5) == {
+        "calories": 228.0,
+        "protein": 8.4,
+        "carbohydrates": 33.1,
+    }
+
+
+def test_entry_nutrition_survives_a_record_with_no_usable_numbers():
+    assert diary_service.entry_nutrition({}, {"nutrition_multiplier": None}, 1) == {}
+    assert diary_service.entry_nutrition({}, {"nutrition_multiplier": 1}, 1) == {}
+
+
+def test_add_food_reports_the_entry_macros_it_logged(monkeypatch):
+    oats = {
+        "id": "oats",
+        "version": "1",
+        "description": "Oat flakes",
+        "nutritional_contents": {
+            "energy": {"value": 456},
+            "protein": 16.9,
+            "carbohydrates": 66.3,
+            "fat": 8.2,
+        },
+        "serving_sizes": [{"value": 100, "unit": "g", "nutrition_multiplier": 1}],
+    }
+    client = _Client()
+    monkeypatch.setattr(diary_service, "get_food_v2", lambda *args: oats)
+
+    result = diary_service.add_food_to_diary(
+        client, "oats", "Breakfast", date(2026, 8, 4), amount=50, unit="g"
+    )
+
+    assert result["nutrition"] == {
+        "calories": 228.0,
+        "protein": 8.4,
+        "carbohydrates": 33.1,
+        "fat": 4.1,
+    }
+
+
+def test_get_day_totals_keeps_only_the_reported_macros():
+    class _Day:
+        def __init__(self):
+            self.totals = {
+                "calories": 1487.4,
+                "carbohydrates": 150.44,
+                "fat": 48.9,
+                "protein": 96.2,
+                "sodium": 2100,
+                "sugar": 61,
+            }
+
+    class _DiaryClient:
+        def get_date(self, target_date):
+            assert target_date == date(2026, 8, 4)
+            return _Day()
+
+    totals = server.get_day_totals(_DiaryClient(), date(2026, 8, 4))
+
+    # Ordered for reading, and trimmed to what a confirmation actually shows.
+    assert list(totals) == ["calories", "protein", "carbohydrates", "fat"]
+    assert totals == {
+        "calories": 1487.4,
+        "protein": 96.2,
+        "carbohydrates": 150.4,
+        "fat": 48.9,
+    }
+
+
+def test_add_tool_returns_day_totals_so_no_second_diary_read_is_needed(monkeypatch):
+    monkeypatch.setattr(diary_tools, "get_mfp_client", lambda: object())
+    monkeypatch.setattr(
+        diary_tools,
+        "add_food_to_diary",
+        lambda **kwargs: {
+            "entry_id": "entry-id",
+            "food_name": "Oat flakes",
+            "requested_amount": 50.0,
+            "requested_unit": "g",
+            "nutrition": {"calories": 228.0},
+        },
+    )
+    monkeypatch.setattr(
+        diary_tools, "get_day_totals", lambda client, target_date: {"calories": 1487.4}
+    )
+
+    payload = json.loads(
+        asyncio.run(
+            diary_tools.mfp_add_food_to_diary(
+                server.AddFoodToDiaryInput(
+                    mfp_id="food-id", meal="Breakfast", amount=50, unit="g"
+                )
+            )
+        )
+    )
+
+    assert payload["success"] is True
+    assert payload["nutrition"] == {"calories": 228.0}
+    assert payload["day_totals"] == {"calories": 1487.4}
+
+
+def test_add_tool_still_reports_success_when_the_totals_read_fails(monkeypatch):
+    monkeypatch.setattr(diary_tools, "get_mfp_client", lambda: object())
+    monkeypatch.setattr(
+        diary_tools,
+        "add_food_to_diary",
+        lambda **kwargs: {
+            "food_name": "Oat flakes",
+            "requested_amount": 50.0,
+            "requested_unit": "g",
+        },
+    )
+
+    def boom(client, target_date):
+        raise RuntimeError("diary page unavailable")
+
+    monkeypatch.setattr(diary_tools, "get_day_totals", boom)
+
+    payload = json.loads(
+        asyncio.run(
+            diary_tools.mfp_add_food_to_diary(
+                server.AddFoodToDiaryInput(
+                    mfp_id="food-id", meal="Breakfast", amount=50, unit="g"
+                )
+            )
+        )
+    )
+
+    # The food is already logged, so a failed totals read must not report a
+    # failed write.
+    assert payload["success"] is True
+    assert payload["day_totals"] is None
+    assert payload["day_totals_error"] == "diary page unavailable"
