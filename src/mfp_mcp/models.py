@@ -292,17 +292,18 @@ class AddFoodToDiaryInput(BaseModel):
     unit: str = Field(
         ...,
         description=(
-            "The unit that matches how the food was described, chosen from the "
-            "request and then checked against the food. Whole items ('1 kiwi', "
-            "'2 eggs') use 'count', which resolves to whatever that food calls one "
-            "item, so a food listing '1 fruit', '1 slice' or '1 large' in "
-            "count_units already supports counting it — that is the right unit for "
-            "'1 kiwi', not a mismatch to work around. Use 'g'/'ml' for a stated "
-            "weight or volume, the serving's own name when the user named a portion "
-            "('2 slices', '1 cup'), and 'serving' only for an explicit serving or "
-            "portion count. Never send a whole item as a weight: amount=2/unit='g' "
-            "on a kiwi logs two grams, about 1 kcal. Almost every food reports a "
-            "generic '1 g' serving, so supports_grams never means grams were meant."
+            "One of the units this food supports, as listed in its serving_options "
+            "and count_units: send the one that most closely fits how the food was "
+            "described. A whole item uses the food's own name for one item, so "
+            "'1 kiwi' against [fruit, g] is unit='fruit', and '1 medium banana' "
+            "against [small, medium, large] is unit='medium', not 'small'. Use "
+            "'g'/'ml' for a stated weight or volume, and 'serving' only for an "
+            "explicit serving or portion count. The generic 'count' is a fallback "
+            "for when no listed unit fits; it silently takes the FIRST item unit, "
+            "so naming the unit is always better. Never send a whole item as a "
+            "weight: amount=2/unit='g' on a kiwi logs two grams, about 1 kcal. "
+            "Almost every food reports a generic '1 g' serving, so supports_grams "
+            "never means grams were meant."
         ),
         min_length=1,
     )
