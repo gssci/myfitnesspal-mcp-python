@@ -6,7 +6,7 @@ from datetime import date
 
 import pytest
 
-from mfp_mcp import server
+from mfp_mcp import server, units
 from mfp_mcp.services import diary as diary_service
 from mfp_mcp.tools import diary as diary_tools
 
@@ -312,6 +312,40 @@ def test_count_resolves_to_the_item_serving_not_a_weight(kiwi):
 
     assert serving["unit"] == "fruit"
     assert servings == 2
+
+
+@pytest.mark.parametrize("unit", ["count", "fruit", "fruits", "whole", "each"])
+def test_every_way_of_saying_one_whole_kiwi_resolves_to_the_fruit_serving(kiwi, unit):
+    # "1 fruit" is what this food calls one kiwi, so asking for a count and
+    # naming the serving have to land on the same entry.
+    serving, servings = server.resolve_food_amount(kiwi, 1, unit)
+
+    assert serving["unit"] == "fruit"
+    assert servings == 1
+
+
+@pytest.mark.parametrize("unit", ["count", "slice", "slices"])
+def test_a_named_serving_matches_in_the_plural_too(unit):
+    # "2 slices" against a serving spelled "1 slice" is the same request, and
+    # used to fail as an unavailable unit.
+    bread = {
+        "serving_sizes": [
+            {"value": 1, "unit": "slice", "nutrition_multiplier": 1, "gram_weight": 30},
+            {"value": 1, "unit": "g", "nutrition_multiplier": 0.033},
+        ]
+    }
+
+    serving, servings = server.resolve_food_amount(bread, 2, unit)
+
+    assert serving["unit"] == "slice"
+    assert servings == 2
+
+
+def test_plural_folding_leaves_short_unit_names_alone():
+    assert units.units_match("g", "g")
+    assert units.units_match("oz", "oz")
+    assert not units.units_match("g", "oz")
+    assert not units.units_match("cup", "scoop")
 
 
 def test_two_kiwis_sent_as_grams_is_refused_with_the_fix(monkeypatch, kiwi):

@@ -11,7 +11,7 @@ from ..config import (
     normalize_meal_name,
     normalize_meal_number,
 )
-from ..units import is_discrete_serving, normalize_unit, usable_gram_weight
+from ..units import is_discrete_serving, normalize_unit, units_match, usable_gram_weight
 from .food import assess_food_plausibility, get_food_v2, invalidate_meal_food_cache
 from .http import _get_csrf_token, _mfp_api_headers, _web_headers
 
@@ -58,11 +58,7 @@ def resolve_food_amount(
             chosen = next((size for size in serving_sizes if is_discrete_serving(size)), None)
         else:
             chosen = next(
-                (
-                    size
-                    for size in serving_sizes
-                    if normalize_unit(str(size.get("unit", ""))) == wanted
-                ),
+                (size for size in serving_sizes if units_match(wanted, str(size.get("unit", "")))),
                 None,
             )
 

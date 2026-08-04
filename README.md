@@ -28,11 +28,14 @@ them to MFP's internal serving multiplier. For example, 250 g of a food whose da
 serving is 60 g is sent as one entry with `servings=4.16666667`. Callers should never
 split that amount into 100 + 100 + 50 or pass grams as a serving count.
 
-Use `unit="count"` for whole items such as two kiwis or eggs. The server maps that
-request to an available discrete serving such as `fruit`, `piece`, `large`, or
-`2 kiwi`. `unit="serving"` is reserved for explicit serving/portion counts. Meal,
-amount, and unit are required, and writes above the serving/calorie safety limits
-are rejected before reaching MyFitnessPal.
+Pick the unit that matches how the food was described, then check the food supports
+it. `unit="count"` is how you ask for whole items: the server resolves it to
+whatever that food calls one item — `fruit`, `piece`, `large`, `slice`, `2 kiwi` —
+so a food offering `1 fruit` already supports "1 kiwi", and the caller never has to
+name that serving itself. A serving the user did name works too, in the singular or
+the plural (`2 slices` matches a `1 slice` serving). `unit="serving"` is reserved
+for explicit serving/portion counts. Meal, amount, and unit are required, and writes
+above the serving/calorie safety limits are rejected before reaching MyFitnessPal.
 
 Almost every MFP food also lists generic `1 g` / `1 kg` / `1 mg` / `1 lb` servings,
 so `supports_grams` is true nearly always and says nothing about what was meant.

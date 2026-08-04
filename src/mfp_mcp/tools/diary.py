@@ -132,6 +132,9 @@ async def mfp_add_food_to_diary(params: AddFoodToDiaryInput) -> str:
 
     amount is the physical quantity in unit, not a database-serving multiplier:
     250 grams is amount=250/unit="g"; 2 whole fruits is amount=2/unit="count".
+    Pick the unit that matches how the food was described, then check the food
+    supports it. unit="count" resolves to whatever that food calls one item, so
+    a food offering "1 fruit" is already the right match for "1 kiwi".
     Use unit="serving" only when the user explicitly says servings/portions.
 
     Returns "nutrition" (this entry's calories and macros), "meal_totals" and

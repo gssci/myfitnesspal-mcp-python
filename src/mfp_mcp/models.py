@@ -292,13 +292,17 @@ class AddFoodToDiaryInput(BaseModel):
     unit: str = Field(
         ...,
         description=(
-            "Physical unit for amount, taken from how the user described the food, "
-            "NOT from the food's serving list. Use 'count' for whole items: "
-            "'2 kiwis' is amount=2/unit='count', never amount=2/unit='g', which "
-            "would log two grams of kiwi. Use 'g' only when the user gave a weight, "
-            "an available serving name when they named one, and 'serving' only for "
-            "an explicit portion count. Almost every food reports a generic '1 g' "
-            "serving, so supports_grams does not mean the user meant grams."
+            "The unit that matches how the food was described, chosen from the "
+            "request and then checked against the food. Whole items ('1 kiwi', "
+            "'2 eggs') use 'count', which resolves to whatever that food calls one "
+            "item, so a food listing '1 fruit', '1 slice' or '1 large' in "
+            "count_units already supports counting it — that is the right unit for "
+            "'1 kiwi', not a mismatch to work around. Use 'g'/'ml' for a stated "
+            "weight or volume, the serving's own name when the user named a portion "
+            "('2 slices', '1 cup'), and 'serving' only for an explicit serving or "
+            "portion count. Never send a whole item as a weight: amount=2/unit='g' "
+            "on a kiwi logs two grams, about 1 kcal. Almost every food reports a "
+            "generic '1 g' serving, so supports_grams never means grams were meant."
         ),
         min_length=1,
     )

@@ -99,6 +99,24 @@ def normalize_unit(unit: str) -> str:
     return _UNIT_ALIASES.get(normalized, normalized)
 
 
+def units_match(requested: str, serving_unit: str) -> bool:
+    """Whether a requested unit names the same measure as a serving's unit.
+
+    MyFitnessPal spells its servings however the contributor typed them, so
+    "2 slices" against a serving of "1 slice" is the same request. Folding a
+    trailing plural keeps that from failing as an unavailable unit; short
+    words are left alone so "oz" and "g" are never truncated.
+    """
+
+    def singular(unit: str) -> str:
+        normalized = normalize_unit(unit)
+        if len(normalized) > 3 and normalized.endswith("s"):
+            return normalized[:-1]
+        return normalized
+
+    return singular(requested) == singular(serving_unit)
+
+
 def is_gram_unit(unit: str) -> bool:
     return normalize_unit(unit) == "g"
 
