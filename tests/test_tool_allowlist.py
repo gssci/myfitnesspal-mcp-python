@@ -11,7 +11,9 @@ def test_server_advertises_only_essential_tools():
 
 
 def test_food_lookup_defaults_are_compact():
-    assert server.SearchFoodInput(query="apple").limit == 15
+    # Fifteen results was roughly 2,400 tokens of context per search, carried
+    # for the rest of the request. Five is enough to choose from.
+    assert server.SearchFoodInput(query="apple").limit == 5
     assert "limit_per_list" not in server.GetMealFoodsInput.model_json_schema()["properties"]
 
 

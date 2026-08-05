@@ -89,11 +89,25 @@ def test_add_food_advertises_every_required_argument():
     assert schema["properties"]["meal"]["type"] == "string"
 
 
-def test_response_format_is_inlined_rather_than_referenced():
-    prop = _schema("mfp_search_food")["properties"]["response_format"]
+def test_response_format_is_not_advertised_to_models():
+    """It exists for Python callers, and cost ~355 tokens of schema to publish."""
+    for tool in _tools():
+        assert "response_format" not in tool.parameters.get("properties", {}), (
+            f"{tool.name} still advertises response_format"
+        )
+        assert "response_format" not in tool.parameters.get("required", [])
 
-    assert prop["enum"] == ["markdown", "json"]
-    assert prop["default"] == "markdown"
+    # Still accepted and still defaulted, for the tests and callers that pass it.
+    assert server.SearchFoodInput(query="apple", response_format="json").response_format == "json"
+    assert server.SearchFoodInput(query="apple").response_format == "markdown"
+
+
+def test_published_schemas_carry_no_generated_titles():
+    """Pydantic labels every property; models ignore them and pay for them."""
+    for tool in _tools():
+        assert "title" not in tool.parameters, f"{tool.name} publishes a schema title"
+        for name, prop in tool.parameters.get("properties", {}).items():
+            assert "title" not in prop, f"{tool.name}.{name} publishes a title"
 
 
 def test_flat_arguments_reach_the_tool(monkeypatch):

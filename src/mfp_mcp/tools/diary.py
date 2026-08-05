@@ -15,6 +15,7 @@ from ..models import (
     AddFoodToDiaryInput,
     GetDiaryInput,
     GetWaterInput,
+    LogFoodInput,
     RemoveFoodFromDiaryInput,
     SetWaterInput,
 )
@@ -25,6 +26,7 @@ from ..services.diary import (
     remove_food_entry,
     set_water_intake,
 )
+from ..services.quick_log import log_food
 
 
 @flat_tool(
@@ -118,6 +120,42 @@ async def mfp_get_water(params: GetWaterInput) -> str:
 
 
 @flat_tool(
+    name="mfp_log_food",
+    annotations={
+        "title": "Find and Log One Food",
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": True,
+    },
+)
+async def mfp_log_food(params: LogFoodInput) -> str:
+    """Log one food by name: finds it and adds it in a single call.
+
+    The normal way to log. Searches this meal's history first, then the food
+    database, picks the closest match that supports the requested unit, and
+    writes the entry. Call it once per distinct food.
+
+    Returns this entry's macros plus "meal_totals" and "day_totals", both
+    already including it, so a confirmation never needs mfp_get_diary. On
+    failure it returns "considered": the foods it turned down and why.
+    """
+    try:
+        client = get_mfp_client()
+        result = log_food(
+            client,
+            food=params.food,
+            amount=params.amount,
+            unit=params.unit,
+            meal=params.meal,
+            target_date=parse_date(params.date),
+        )
+        return json.dumps(result, indent=2, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2, ensure_ascii=False)
+
+
+@flat_tool(
     name="mfp_add_food_to_diary",
     annotations={
         "title": "Add Food to Diary",
@@ -128,20 +166,10 @@ async def mfp_get_water(params: GetWaterInput) -> str:
     },
 )
 async def mfp_add_food_to_diary(params: AddFoodToDiaryInput) -> str:
-    """Add one food using an ID from search or meal-history resolution.
+    """Add one food by its exact mfp_id, when mfp_log_food picked the wrong one.
 
-    amount is the physical quantity in unit, not a database-serving multiplier:
-    250 grams is amount=250/unit="g".
-
-    Send whichever of the food's own serving_options/count_units fits the
-    request most closely: "1 kiwi" against [fruit, g] is unit="fruit", and
-    "1 medium banana" against [small, medium, large] is unit="medium". The
-    generic unit="count" only takes the first item unit, so name the unit when
-    one fits. Use unit="serving" only for an explicit servings/portions count.
-
-    Returns "nutrition" (this entry's calories and macros), "meal_totals" and
-    "day_totals" (that meal's and the whole day's, both including this entry),
-    so confirming an add never needs a follow-up mfp_get_diary call.
+    amount is the physical quantity in unit, not a serving multiplier. Returns
+    this entry's macros plus meal_totals and day_totals, both including it.
     """
     try:
         client = get_mfp_client()

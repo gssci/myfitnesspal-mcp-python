@@ -24,6 +24,29 @@ from ..services.food import (
     serving_capabilities,
 )
 
+# A meal's history runs to 25 recent plus 50 frequent rows. Reported in full it
+# was the single largest thing in the agent's context — around 5,400 tokens,
+# carried for the rest of the request. The lists are ordered by recency and by
+# frequency, so the head of each is where a match realistically lives, and
+# mfp_log_food searches the uncut lists server-side regardless.
+MEAL_FOOD_LIST_LIMIT = 15
+
+
+def _history_summary(item: dict) -> dict:
+    """Project a history row down to what choosing between rows actually needs.
+
+    Dropped: `source` (the enclosing list already names it), `verified`,
+    `available_servings` (mfp_resolve_meal_food re-reads the serving table
+    anyway), and `supports_grams`/`supports_count`, which were derived flags
+    nothing consulted.
+    """
+    quantity = item.get("previous_quantity")
+    serving = item.get("previous_serving")
+    summary = {"name": item["name"], "history_id": item["history_id"]}
+    if quantity is not None and serving:
+        summary["usually"] = f"{quantity:g} x {serving}"
+    return summary
+
 
 @flat_tool(
     name="mfp_get_meal_foods",
@@ -36,11 +59,10 @@ from ..services.food import (
     },
 )
 async def mfp_get_meal_foods(params: GetMealFoodsInput) -> str:
-    """Get recent and frequent foods for a specific meal.
+    """List what this meal usually contains, for browsing rather than logging.
 
-    Call once per requested meal before global search and reuse the result. Meal
-    numbers: 0=Breakfast, 1=Lunch, 2=Dinner, 3=Snacks. Resolve a semantic match's
-    history_id; it cannot be added directly.
+    Meal numbers: 0=Breakfast, 1=Lunch, 2=Dinner, 3=Snacks. To log a food, call
+    mfp_log_food instead — it searches this same history itself.
     """
     try:
         client = get_mfp_client()
@@ -68,7 +90,20 @@ async def mfp_get_meal_foods(params: GetMealFoodsInput) -> str:
                 "This meal has no recent or frequent foods yet. "
                 "Use mfp_search_food for every food in this meal."
             )
-        data.update({key: lists[key] for key in ("recent", "frequent")})
+        if len(lists["recent"]) > MEAL_FOOD_LIST_LIMIT or (
+            len(lists["frequent"]) > MEAL_FOOD_LIST_LIMIT
+        ):
+            data["note"] = (
+                f"{data.get('note', '')} Each list is cut to the first "
+                f"{MEAL_FOOD_LIST_LIMIT} entries; use mfp_search_food for anything "
+                "not shown."
+            ).strip()
+        data.update(
+            {
+                key: [_history_summary(item) for item in lists[key][:MEAL_FOOD_LIST_LIMIT]]
+                for key in ("recent", "frequent")
+            }
+        )
         return format_response(data, params.response_format, "Recent and Frequent Meal Foods")
     except Exception as e:
         return f"Error getting meal foods: {e!s}"
@@ -108,9 +143,11 @@ async def mfp_resolve_meal_food(params: ResolveMealFoodInput) -> str:
     },
 )
 async def mfp_search_food(params: SearchFoodInput) -> str:
-    """Search foods with IDs, servings, calories, verification, and plausibility.
+    """Search the food database, returning each food's id, units and calories.
 
-    Prefer supports_grams=true for gram requests; never use implausible results.
+    For logging a food, prefer mfp_log_food, which searches and adds in one
+    call. Use this to browse or to disambiguate. Never use a result marked
+    implausible.
     """
     try:
         client = get_mfp_client()

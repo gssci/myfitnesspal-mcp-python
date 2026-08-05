@@ -262,7 +262,7 @@ def test_search_prefers_the_classic_page_and_enriches_it_from_the_api(monkeypatc
     results = food_service.search_foods_web(client, "banana")
 
     assert [result["mfp_id"] for result in results] == ["1234"]
-    assert results[0]["serving"] == "118 g"
+    assert results[0]["units"] == ["118 g"]
     # The Next.js page was never requested.
     assert all(url.startswith(LEGACY_SEARCH_URL) for url in client.session.requests)
 

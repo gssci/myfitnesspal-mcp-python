@@ -46,7 +46,7 @@ class SearchFoodInput(BaseModel):
         max_length=200,
     )
     limit: int = Field(
-        default=15,
+        default=5,
         description="Maximum number of results to return",
         ge=1,
         le=50,
@@ -54,6 +54,52 @@ class SearchFoodInput(BaseModel):
     response_format: ResponseFormat = Field(
         default=ResponseFormat.MARKDOWN,
         description="Output format: 'markdown' for human-readable or 'json' for structured data",
+    )
+
+
+class LogFoodInput(BaseModel):
+    """Find one food and log it, in a single call."""
+
+    model_config = ConfigDict(str_strip_whitespace=True, coerce_numbers_to_str=True)
+
+    food: str = Field(
+        ...,
+        description=(
+            "The food as the user described it, e.g. 'yogurt greco 0%' or "
+            "'petto di pollo'. Include the brand when they named one."
+        ),
+        min_length=1,
+        max_length=200,
+    )
+    amount: float = Field(
+        ...,
+        description=(
+            "Physical amount expressed in `unit`, NOT a number of database servings."
+        ),
+        gt=0,
+        le=5000,
+    )
+    unit: str = Field(
+        ...,
+        description=(
+            "The unit the user spoke in: 'g'/'ml' for a weight or volume, the "
+            "food's own word for one item ('fruit', 'slice', 'medium') for a "
+            "whole item, 'serving' only for an explicit serving count. A matching "
+            "unit is picked from whatever the chosen food actually supports."
+        ),
+        min_length=1,
+    )
+    meal: MealName = Field(
+        ...,
+        description=(
+            "Meal name: 'Breakfast', 'Lunch', 'Dinner', or 'Snacks'. "
+            "The meal number 0-3 is also accepted."
+        ),
+    )
+    date: str | None = Field(
+        default=None,
+        description="Date in YYYY-MM-DD format. Defaults to today if not specified.",
+        pattern=r"^\d{4}-\d{2}-\d{2}$",
     )
 
 
@@ -289,21 +335,15 @@ class AddFoodToDiaryInput(BaseModel):
         gt=0,
         le=5000,
     )
+    # The rules for choosing a unit are stated once, in the agent's system
+    # prompt. Restating them here cost about 200 tokens of tool schema on every
+    # single model call, to repeat guidance the model had already been given.
     unit: str = Field(
         ...,
         description=(
-            "One of the units this food supports, as listed in its serving_options "
-            "and count_units: send the one that most closely fits how the food was "
-            "described. A whole item uses the food's own name for one item, so "
-            "'1 kiwi' against [fruit, g] is unit='fruit', and '1 medium banana' "
-            "against [small, medium, large] is unit='medium', not 'small'. Use "
-            "'g'/'ml' for a stated weight or volume, and 'serving' only for an "
-            "explicit serving or portion count. The generic 'count' is a fallback "
-            "for when no listed unit fits; it silently takes the FIRST item unit, "
-            "so naming the unit is always better. Never send a whole item as a "
-            "weight: amount=2/unit='g' on a kiwi logs two grams, about 1 kcal. "
-            "Almost every food reports a generic '1 g' serving, so supports_grams "
-            "never means grams were meant."
+            "One of the units this food lists in `units`/`whole_item_units`. "
+            "A whole item takes the food's own word for one item ('fruit', "
+            "'slice', 'medium'), never 'g'."
         ),
         min_length=1,
     )

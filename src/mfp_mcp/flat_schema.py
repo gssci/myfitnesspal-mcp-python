@@ -46,6 +46,42 @@ _UNION_ORIGINS = (Union, types.UnionType)
 # tests can assert the published schema survives that round trip.
 OLLAMA_PROPERTY_KEYS = frozenset({"type", "items", "description", "enum"})
 
+# Arguments every tool declares but no model should be shown. `response_format`
+# exists for Python callers and tests; advertising it cost ~355 tokens of schema
+# across the tool surface, on every model call, for a knob the agent never turns.
+HIDDEN_ARGUMENTS = frozenset({"response_format"})
+
+
+def _strip_titles(node: Any) -> Any:
+    """Drop pydantic's generated ``title`` keys from a published JSON schema.
+
+    Pydantic labels every property ("Mfp Id", "Meal") and every argument model.
+    Models ignore the field entirely, so it is pure prompt weight.
+    """
+    if isinstance(node, dict):
+        return {key: _strip_titles(value) for key, value in node.items() if key != "title"}
+    if isinstance(node, list):
+        return [_strip_titles(value) for value in node]
+    return node
+
+
+def published_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Trim a tool's advertised schema to what a model has to read.
+
+    Only the advertised copy is trimmed. Validation runs off the argument model
+    FastMCP built from the signature, so a hidden argument stays accepted with
+    its default if some caller does send it.
+    """
+    pruned = _strip_titles(schema)
+    properties = pruned.get("properties")
+    if isinstance(properties, dict):
+        for name in HIDDEN_ARGUMENTS:
+            properties.pop(name, None)
+    required = pruned.get("required")
+    if isinstance(required, list):
+        pruned["required"] = [name for name in required if name not in HIDDEN_ARGUMENTS]
+    return pruned
+
 
 def _coerce_scalar_to_str(value: Any) -> Any:
     """Accept the numeric IDs that language models keep sending for string fields.

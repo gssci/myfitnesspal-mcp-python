@@ -398,7 +398,10 @@ def _parse_history_fragment(content: bytes, source: str | None = None) -> list[d
         )
         quantity = quantity_nodes[0].get("value") if quantity_nodes else None
         try:
-            previous_quantity: float | None = float(str(quantity).replace(",", "."))
+            # Rounded because MyFitnessPal stores these as float32: an unrounded
+            # 0.8 prints as 0.800000011920929, which is a dozen wasted tokens on
+            # every row of a list the model reads in full.
+            previous_quantity: float | None = round(float(str(quantity).replace(",", ".")), 4)
         except (TypeError, ValueError):
             previous_quantity = None
         results.append(
@@ -617,40 +620,62 @@ def resolve_meal_food(client, history_id: str, meal: int) -> dict[str, Any]:
     food = get_food_v2(client, mfp_id)
     energy = ((food.get("nutritional_contents") or {}).get("energy") or {}).get("value")
     serving_sizes = food.get("serving_sizes") or []
-    return {
+    capabilities = serving_capabilities(serving_sizes)
+    # `servings` and `serving_options` used to be reported side by side, which
+    # spent tokens printing the same serving table twice. One formatted list,
+    # spelled the same way search results spell it, says all of it.
+    result: dict[str, Any] = {
         "resolved": True,
         "mfp_id": str(mfp_id),
         "name": food.get("description") or candidate["name"],
         "brand": food.get("brand_name"),
-        "verified": bool(food.get("verified")),
+        "units": [_format_serving_size(s) for s in serving_sizes[:5]],
         "calories": energy,
-        "servings": [_format_serving_size(s) for s in serving_sizes],
-        **serving_capabilities(serving_sizes),
-        "nutrition_plausibility": assess_food_plausibility(food),
     }
+    if capabilities["count_units"]:
+        result["whole_item_units"] = capabilities["count_units"]
+    if assess_food_plausibility(food)["status"] == "implausible":
+        result["implausible"] = True
+    return result
 
 
 def _result_from_v2_item(item: dict[str, Any], rank: int, query: str) -> dict[str, Any]:
-    """Shape one food record the way the search tools report it."""
+    """Shape one food record the way the search tools report it.
+
+    Deliberately lean. This list is read in full by the model and then carried
+    for the rest of the request, so every field has to earn its tokens. Dropped
+    since it did not: ``rank`` (the list is already in rank order), ``serving``
+    and ``available_servings`` (both restate ``units``), ``supports_grams``
+    (true for nearly every food, so it never discriminates), ``supports_count``
+    (implied by ``whole_item_units``), and ``verified`` (nothing reads it).
+    Flags that only matter when set are emitted only when set.
+    """
+    del rank
     serving_sizes = item.get("serving_sizes") or []
     energy = (item.get("nutritional_contents") or {}).get("energy") or {}
-    return {
-        "rank": rank,
+    capabilities = serving_capabilities(serving_sizes)
+    result: dict[str, Any] = {
         "name": item.get("description"),
-        "exact_name_match": _food_name_key(item.get("description")) == _food_name_key(query),
         "brand": item.get("brand_name"),
-        "serving": _format_serving_size(serving_sizes[0]) if serving_sizes else None,
-        "available_servings": [_format_serving_size(serving) for serving in serving_sizes[:5]],
-        **serving_capabilities(serving_sizes),
+        "units": [_format_serving_size(serving) for serving in serving_sizes[:5]],
         "calories": energy.get("value"),
-        "verified": bool(item.get("verified")),
-        "nutrition_plausibility": assess_food_plausibility(item),
         "mfp_id": str(item["id"]),
     }
+    if _food_name_key(item.get("description")) == _food_name_key(query):
+        result["exact_name_match"] = True
+    if capabilities["count_units"]:
+        result["whole_item_units"] = capabilities["count_units"]
+    if assess_food_plausibility(item)["status"] == "implausible":
+        result["implausible"] = True
+    return result
 
 
 def search_foods_legacy(client, query: str, limit: int = 15) -> list[dict[str, Any]]:
-    """Search foods through the classic Rails search page.
+    """Search foods through the classic Rails search page, returning v2 records.
+
+    Returns the raw v2 food records rather than reported results, so callers
+    that need the full serving table (mfp_log_food, which has to verify a unit
+    before committing an entry) do not have to re-fetch every candidate.
 
     Preferred over the Next.js page because it authenticates off `_mfp_session`
     alone: it keeps answering when the NextAuth session has been rejected, which
@@ -692,27 +717,21 @@ def search_foods_legacy(client, query: str, limit: int = 15) -> list[dict[str, A
         return []
 
     items = get_foods_v2(client, ids)
-    results = []
-    for food_id in ids:
-        item = items.get(food_id)
-        if item is None:
-            # Listed by search but no longer served by the v2 API, so it could
-            # not be added to the diary anyway.
-            continue
-        results.append(_result_from_v2_item(item, len(results) + 1, query))
-    return results
+    # Ids listed by search but no longer served by the v2 API are skipped: they
+    # could not be added to the diary anyway.
+    return [items[food_id] for food_id in ids if food_id in items]
 
 
-def search_foods_web(client, query: str, limit: int = 15) -> list[dict[str, Any]]:
-    """Search the MyFitnessPal food database.
+def search_food_records(client, query: str, limit: int = 15) -> list[dict[str, Any]]:
+    """Search the MyFitnessPal food database, returning raw v2 food records.
 
     Tries the classic page first and falls back to the Next.js one, so a search
     only fails when *both* of MyFitnessPal's sessions are dead.
     """
     try:
-        results = search_foods_legacy(client, query, limit)
-        if results:
-            return results
+        records = search_foods_legacy(client, query, limit)
+        if records:
+            return records
         logger.info(f"Classic search returned nothing for {query!r}; trying the Next.js page")
     except Exception as e:
         # The two surfaces authenticate off different sessions, so the classic
@@ -726,8 +745,16 @@ def search_foods_web(client, query: str, limit: int = 15) -> list[dict[str, Any]
     return search_foods_next(client, query, limit)
 
 
+def search_foods_web(client, query: str, limit: int = 15) -> list[dict[str, Any]]:
+    """Search the MyFitnessPal food database, shaped for reporting to a model."""
+    return [
+        _result_from_v2_item(item, rank, query)
+        for rank, item in enumerate(search_food_records(client, query, limit), start=1)
+    ]
+
+
 def search_foods_next(client, query: str, limit: int = 15) -> list[dict[str, Any]]:
-    """Search foods through the Next.js search page's server-rendered state."""
+    """Search foods through the Next.js page's state, returning v2 records."""
     url = f"{MFP_FOOD_SEARCH_PAGE}/{quote(query, safe='')}"
 
     def load_page():
@@ -768,13 +795,13 @@ def search_foods_next(client, query: str, limit: int = 15) -> list[dict[str, Any
         )
 
     raw_items = _extract_food_search_items(response.content, query)
-    results = []
+    records = []
     for wrapped_item in raw_items[:limit]:
         item = wrapped_item.get("item", {}) if isinstance(wrapped_item, dict) else {}
         if not item.get("id"):
             continue
-        results.append(_result_from_v2_item(item, len(results) + 1, query))
-    return results
+        records.append(item)
+    return records
 
 
 def list_own_foods(client, search: str = "") -> list[dict[str, Any]]:

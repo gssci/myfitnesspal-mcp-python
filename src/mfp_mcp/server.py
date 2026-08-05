@@ -30,6 +30,7 @@ from .credentials import (
     get_secret_key,
     looks_like_fernet_token,
 )
+from .flat_schema import HIDDEN_ARGUMENTS, published_schema
 from .formatting import (
     ResponseFormat,
     format_exercise,
@@ -52,6 +53,7 @@ from .models import (
     GetReportInput,
     GetWaterInput,
     ListOwnFoodsInput,
+    LogFoodInput,
     RemoveFoodFromDiaryInput,
     ResolveMealFoodInput,
     SearchFoodInput,
@@ -82,6 +84,7 @@ from .services.food import (
     invalidate_meal_food_cache,
     list_own_foods,
     resolve_meal_food,
+    search_food_records,
     search_foods_legacy,
     search_foods_next,
     search_foods_web,
@@ -98,11 +101,13 @@ from .services.http import (
     refresh_session_from_browser,
     web_session_is_live,
 )
+from .services.quick_log import log_food
 from .tools.auth import refresh_browser_cookies
 from .tools.diary import (
     mfp_add_food_to_diary,
     mfp_get_diary,
     mfp_get_water,
+    mfp_log_food,
     mfp_remove_food_from_diary,
     mfp_set_water,
 )
@@ -128,6 +133,7 @@ ESSENTIAL_TOOL_NAMES = frozenset(
     {
         "refresh_browser_cookies",
         "mfp_get_diary",
+        "mfp_log_food",
         "mfp_add_food_to_diary",
         "mfp_remove_food_from_diary",
         "mfp_get_meal_foods",
@@ -140,11 +146,17 @@ ESSENTIAL_TOOL_NAMES = frozenset(
 
 
 def _keep_essential_tools() -> None:
-    """Limit the advertised MCP surface while preserving Python re-exports."""
-    registered = mcp._tool_manager.list_tools()
-    for tool in registered:
+    """Limit and trim the advertised MCP surface, preserving Python re-exports.
+
+    Every advertised schema is also pruned of pydantic's generated titles and of
+    the arguments no model should be shown. Doing it here rather than in
+    ``flat_tool`` covers the tools registered straight through ``mcp.tool``.
+    """
+    for tool in mcp._tool_manager.list_tools():
         if tool.name not in ESSENTIAL_TOOL_NAMES:
             mcp.remove_tool(tool.name)
+        else:
+            tool.parameters = published_schema(tool.parameters)
 
 
 _keep_essential_tools()

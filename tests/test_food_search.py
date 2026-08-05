@@ -70,29 +70,16 @@ def test_search_foods_web_parses_food_id_and_summary():
 
     results = server.search_foods_web(client, "chicken breast")
 
+    # Lean on purpose: this list is read in full by the model and then carried
+    # for the rest of the request. Flags appear only when they are true.
     assert results == [
         {
-            "rank": 1,
             "name": "Chicken. Breast",
-            "exact_name_match": True,
             "brand": "Chicken breast",
-            "serving": "4 oz",
-            "available_servings": ["4 oz", "100 grammi"],
-            "serving_options": [
-                {"amount": 4, "unit": "oz"},
-                {"amount": 100, "unit": "grammi"},
-            ],
-            "supports_grams": True,
-            "supports_count": False,
-            "count_units": [],
+            "units": ["4 oz", "100 grammi"],
             "calories": 110,
-            "verified": False,
-            "nutrition_plausibility": {
-                "status": "plausible",
-                "calories_per_100_g_or_ml": 110.0,
-                "warnings": [],
-            },
             "mfp_id": "88518932032557",
+            "exact_name_match": True,
         }
     ]
     assert client.session.request[0].endswith("/chicken%20breast")
@@ -123,9 +110,7 @@ def test_search_marks_food_without_gram_serving():
         }
     }
     result = server.search_foods_web(_Client(_search_page("apple", items=[item])), "apple")[0]
-    assert result["supports_grams"] is False
-    assert result["supports_count"] is True
-    assert result["count_units"] == ["piece"]
+    assert result["whole_item_units"] == ["piece"]
 
 
 def test_search_marks_named_single_item_as_countable():
@@ -143,8 +128,7 @@ def test_search_marks_named_single_item_as_countable():
 
     result = server.search_foods_web(_Client(_search_page("egg", items=[item])), "egg")[0]
 
-    assert result["supports_count"] is True
-    assert result["count_units"] == ["large"]
+    assert result["whole_item_units"] == ["large"]
 
 
 def test_search_does_not_treat_parenthesized_weight_unit_as_countable():
@@ -159,8 +143,7 @@ def test_search_does_not_treat_parenthesized_weight_unit_as_countable():
 
     result = server.search_foods_web(_Client(_search_page("oats", items=[item])), "oats")[0]
 
-    assert result["supports_count"] is False
-    assert result["supports_grams"] is True
+    assert "whole_item_units" not in result
 
 
 def test_search_foods_web_allows_zero_results():
@@ -182,8 +165,7 @@ def test_search_flags_impossible_calories_per_gram():
         0
     ]
 
-    assert result["nutrition_plausibility"]["status"] == "implausible"
-    assert result["nutrition_plausibility"]["calories_per_100_g_or_ml"] == 80000
+    assert result["implausible"] is True
 
 
 def test_food_details_uses_add_paths_v2_serving_metadata(monkeypatch):

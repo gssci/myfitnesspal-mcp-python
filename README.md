@@ -7,6 +7,7 @@ A focused [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) serve
 | Tool | Type | Description |
 |------|------|-------------|
 | `mfp_get_diary` | Read | Get food diary entries for any date |
+| `mfp_log_food` | Write | Find one food by name and log it, in a single call |
 | `mfp_get_meal_foods` | Read | Get meal-specific recent and frequent foods |
 | `mfp_resolve_meal_food` | Read | Resolve and nutrition-check a history item for logging |
 | `mfp_search_food` | Read | Search the MyFitnessPal food database |
@@ -50,6 +51,14 @@ Food logging checks `mfp_get_meal_foods` before global search. A matching recent
 or frequent item is converted to a modern API ID by `mfp_resolve_meal_food`.
 The short-lived history cache avoids repeating those HTTP requests during
 resolution.
+
+`mfp_log_food` runs that whole sequence — history, resolve, search, rank, add —
+inside one call. A candidate is only offered up once it has passed the same
+plausibility, unit and portion checks the write itself performs, so the tool
+either logs the food or reports, in `considered`, which foods it turned down
+and why. This exists for the token cost, not for convenience: an LLM client
+doing the same work reads every candidate into its context and pays four model
+round trips per food instead of one, each re-reading the conversation so far.
 
 Search and resolution results include `nutrition_plausibility`. The add tool
 also enforces this check and refuses records above a generous physical ceiling
@@ -734,16 +743,33 @@ Get food diary for a specific date.
 - `date` (optional): YYYY-MM-DD format, defaults to today
 - `response_format`: "markdown" or "json"
 
+### mfp_log_food
+Find one food by name and add it to the diary, in a single call. The normal way
+to log.
+- `food` (required): The food as the user described it, brand included
+- `amount` (required): Physical amount expressed in `unit`
+- `unit` (required): `g`/`ml` for a weight or volume, the food's own word for
+  one item (or `count`) for a whole item, `serving` for an explicit serving
+  count. A whole-item unit the chosen food does not spell that way falls back
+  to `count`; a weight never does.
+- `meal` (required): "Breakfast", "Lunch", "Dinner", "Snacks", or 0–3
+- `date` (optional): YYYY-MM-DD format (default: today)
+
+Returns the entry's macros plus `meal_totals` and `day_totals`, both already
+including it. On failure, returns `considered`: each rejected food with its
+units and a `why_not`.
+
 ### mfp_search_food
-Search the MyFitnessPal food database.
+Search the MyFitnessPal food database. For logging, prefer `mfp_log_food`.
 - `query` (required): Search term
-- `limit` (optional): Max results (default 15, max 50)
+- `limit` (optional): Max results (default 5, max 50)
 - `response_format`: "markdown" or "json"
 
 ### mfp_get_meal_foods
-Get recent and frequent foods for one meal before doing a global search.
+Get recent and frequent foods for one meal, for browsing rather than logging.
 - `meal` (required): 0=Breakfast, 1=Lunch, 2=Dinner, 3=Snacks
-- Recent and frequent lists are returned without truncation.
+- Each list is reported down to its first 15 entries, with the true counts;
+  `mfp_log_food` searches the uncut lists itself.
 - `response_format`: "markdown" or "json"
 
 ### mfp_resolve_meal_food
@@ -761,7 +787,8 @@ Get detailed nutrition for a food item.
 - `response_format`: "markdown" or "json"
 
 ### mfp_add_food_to_diary
-Add a measured amount of food to your diary for a specific meal and date.
+Add a measured amount of food by its exact ID, when `mfp_log_food` picked the
+wrong one.
 - `mfp_id` (required): Modern food ID from `mfp_resolve_meal_food` or `mfp_search_food`
 - `meal` (required): Meal name - "Breakfast", "Lunch", "Dinner", or "Snacks". The meal
   number 0-3 is also accepted.
@@ -772,10 +799,11 @@ Add a measured amount of food to your diary for a specific meal and date.
   Italian aliases such as `grammi` and `porzioni` are accepted.
 
 **Example workflow:**
-1. Use `mfp_get_meal_foods`; resolve a matching history item with
-   `mfp_resolve_meal_food`. Use `mfp_search_food` only if needed.
-2. Add 250 g in one call:
-   `{"mfp_id":"27769042718141","meal":"Snacks","amount":250,"unit":"g"}`
+1. Normally, one call does it:
+   `mfp_log_food {"food":"yogurt greco 0%","amount":250,"unit":"g","meal":"Snacks"}`
+2. Only when that picked the wrong food: identify the right ID with
+   `mfp_search_food`, then
+   `mfp_add_food_to_diary {"mfp_id":"27769042718141","meal":"Snacks","amount":250,"unit":"g"}`
 
 The response reports the requested amount, selected database serving, calculated
 serving count, and entry ID. Unknown units fail closed without writing an entry.

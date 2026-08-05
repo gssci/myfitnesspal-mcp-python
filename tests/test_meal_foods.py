@@ -133,8 +133,8 @@ def test_resolve_meal_food_returns_checked_modern_id(monkeypatch):
 
     assert result["resolved"] is True
     assert result["mfp_id"] == "97065782668333"
-    assert result["serving_options"] == [{"amount": 10, "unit": "g"}]
-    assert result["nutrition_plausibility"]["status"] == "plausible"
+    assert result["units"] == ["10 g"]
+    assert "implausible" not in result
 
 
 def test_add_food_refuses_physically_impossible_entry(monkeypatch):
